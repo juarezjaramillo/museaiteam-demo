@@ -93,8 +93,10 @@ export async function connectUrl(
   if (provider === "slack") {
     const q = new URLSearchParams({
       client_id: id,
-      // channels:history feeds the message-volume metric pull.
-      scope: "chat:write,channels:read,channels:join,channels:history",
+      // channels:history feeds the message-volume metric pull;
+      // app_mentions + im scopes feed inbound replies and owner DMs.
+      scope:
+        "chat:write,channels:read,channels:join,channels:history,app_mentions:read,im:history,im:write",
       redirect_uri: redirect,
       state,
     });
@@ -379,6 +381,25 @@ async function refreshAccessToken(
 
 const REFRESHABLE: readonly Provider[] = ["hubspot", "linear"];
 
+/**
+ * Decrypt with the current key, falling back to the previous key during
+ * rotation. Returns whether the previous key was used so callers can
+ * rewrap the row to the current key on read.
+ */
+async function decryptToken(
+  env: Env,
+  b64: string,
+): Promise<{ text: string; rewrapped: boolean }> {
+  const key = keyFromHex(env.TOKEN_ENC_KEY);
+  try {
+    return { text: await decryptFromB64(key, b64), rewrapped: false };
+  } catch {
+    if (!env.TOKEN_ENC_KEY_PREV) throw new Error("token decrypt failed");
+    const prev = keyFromHex(env.TOKEN_ENC_KEY_PREV);
+    return { text: await decryptFromB64(prev, b64), rewrapped: true };
+  }
+}
+
 export async function loadToken(
   env: Env,
   orgId: string,
@@ -394,12 +415,23 @@ export async function loadToken(
       expires_at: string | null;
     }>();
   if (!row) return null;
-  const key = keyFromHex(env.TOKEN_ENC_KEY);
+  const rewrap = async (text: string): Promise<string> => {
+    const key = keyFromHex(env.TOKEN_ENC_KEY);
+    return encryptToB64(key, text);
+  };
   const expired =
     !!row.expires_at &&
     Date.now() > Date.parse(row.expires_at) - 60_000;
   if (!expired) {
-    return decryptFromB64(key, row.access_token_enc);
+    const { text, rewrapped } = await decryptToken(env, row.access_token_enc);
+    if (rewrapped) {
+      await env.DB.prepare(
+        "UPDATE oauth_tokens SET access_token_enc = ?, updated_at = datetime('now') WHERE org_id = ? AND provider = ?",
+      )
+        .bind(await rewrap(text), orgId, provider)
+        .run();
+    }
+    return text;
   }
   // Expired: rotate inline so scheduled checks and long goals never see
   // a dead token. Unrefreshable providers fail loudly into reconnect.
@@ -407,7 +439,7 @@ export async function loadToken(
     throw new Error(`${provider} token expired — reconnect ${provider}`);
   }
   try {
-    const refresh = await decryptFromB64(key, row.refresh_token_enc);
+    const { text: refresh } = await decryptToken(env, row.refresh_token_enc);
     const tokens = await refreshAccessToken(env, provider, refresh);
     await storeToken(env, orgId, provider, tokens);
     return tokens.access;

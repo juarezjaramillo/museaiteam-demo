@@ -7,6 +7,7 @@ import {
   normalizeShop,
   trialStatus,
   validateProviderConfig,
+  verifyState,
 } from "@museaiteam/shared";
 import { z } from "zod";
 import type { Env } from "./bindings.js";
@@ -146,8 +147,10 @@ async function runRole(
 // Pages dashboard + local dev may call the API cross-origin.
 app.use("/api/*", async (c, next) => {
   const origin = c.req.header("origin") ?? "";
+  // Credentialed CORS is allowlisted to our own surfaces: any *.pages.dev
+  // would let a stranger's site call the API as the victim.
   const allowed =
-    /^https:\/\/[a-z0-9-]+\.pages\.dev$/.test(origin) ||
+    /^https:\/\/([a-z0-9-]+\.)?museaiteam\.pages\.dev$/.test(origin) ||
     /^http:\/\/localhost(:\d+)?$/.test(origin) ||
     (origin !== "" && origin === c.env.APP_URL);
   if (allowed) {
@@ -772,6 +775,12 @@ app.get("/api/auth/:provider/connect", async (c) => {
   if (!isProvider(provider) || !org || org.length > 64) {
     return c.json({ error: "unknown provider or bad org" }, 400);
   }
+  // Binding a provider account to an org is owner-only: without this,
+  // anyone who knows an org id could attach their own accounts to it.
+  const user = await getSessionUser(c.env, c.req.raw);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+  const role = await memberRole(c.env, org, user.id);
+  if (role !== "owner") return c.json({ error: "forbidden" }, 403);
   if (provider === "shopify") {
     const shop = normalizeShop(c.req.query("shop") ?? "");
     if (!shop) {
@@ -839,6 +848,19 @@ app.get("/api/auth/:provider/callback", async (c) => {
     c.redirect(`${c.env.APP_URL}/?error=${encodeURIComponent(msg)}`, 302);
   if (!isProvider(provider) || !code || !state) {
     return fail(`${provider} connect failed`);
+  }
+  {
+    // The completer must own the org the state binds: the sign-in cookie
+    // survives the provider round-trip, so a missing session is a forgery.
+    const user = await getSessionUser(c.env, c.req.raw);
+    const { org } = await verifyState(c.env.AUTH_SECRET, state).catch(() => ({
+      org: "",
+      shop: null,
+    }));
+    const role = user && org ? await memberRole(c.env, org, user.id) : null;
+    if (!user || role !== "owner") {
+      return fail(`${provider} connect needs an owner session`);
+    }
   }
   try {
     const base = new URL(c.req.url).origin;

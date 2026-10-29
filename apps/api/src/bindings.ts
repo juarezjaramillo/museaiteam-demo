@@ -8,6 +8,7 @@ export interface Env {
   APP_URL: string;
   AUTH_SECRET: string;
   TOKEN_ENC_KEY: string;
+  TOKEN_ENC_KEY_PREV?: string;
   META_MODEL_API_KEY: string;
   SPARK_MODE?: string;
   GOOGLE_CLIENT_ID?: string;
