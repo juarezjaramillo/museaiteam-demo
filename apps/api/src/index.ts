@@ -198,6 +198,8 @@ app.post(
     if (!run) return c.json({ error: "not found" }, 404);
     const user = await approvalDecider(c, run.org_id);
     if (!user) return c.json({ error: "forbidden" }, 403);
+    const gate = await trialGate(c.env, run.org_id);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
     const body = c.req.valid("json");
     const res = await decidePreApproval(c.env, {
       runId: run.id,
@@ -1235,6 +1237,8 @@ app.post("/api/orgs/:org/approvals/approve-all", async (c) => {
   const org = c.req.param("org") ?? "";
   const user = await approvalDecider(c, org);
   if (!user) return c.json({ error: "forbidden" }, 403);
+  const gate = await trialGate(c.env, org);
+  if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
   const pend = await listApprovals(c.env, org, "pending");
   let approved = 0;
   const failed: string[] = [];
@@ -1306,6 +1310,8 @@ app.post(
   async (c) => {
     const org = await roleOrg(c, ...DECIDERS);
     if (!org) return c.json({ error: "forbidden" }, 403);
+    const gate = await trialGate(c.env, org);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
     const b = c.req.valid("json");
     const res = await decideProposal(c.env, org, c.req.param("id"), b.decision, b.note);
     if (res === "notfound") return c.json({ error: "not found" }, 404);
@@ -1520,12 +1526,13 @@ app.get("/api/orgs/:org/billing", async (c) => {
   const org = await roleOrg(c, ...OWNERS);
   if (!org) return c.json({ error: "forbidden" }, 403);
   const row = await c.env.DB.prepare(
-    "SELECT subscribed FROM orgs WHERE id = ?",
+    "SELECT subscribed, sub_status FROM orgs WHERE id = ?",
   )
     .bind(org)
-    .first<{ subscribed: number }>();
+    .first<{ subscribed: number; sub_status: string }>();
   return c.json({
     subscribed: (row?.subscribed ?? 0) === 1,
+    subStatus: row?.sub_status ?? "none",
     seats: await rosterSeats(c.env, org),
     meter: await getMeter(c.env, org),
     pricePerWorker: "$499",

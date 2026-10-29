@@ -3,6 +3,7 @@ import { api } from "../api.js";
 
 interface BillingInfo {
   subscribed: boolean;
+  subStatus: string;
   seats: number;
   meter: {
     month: string;
@@ -49,6 +50,11 @@ export function Billing({ org }: { org: string }) {
       </div>
       <p className="page-sub">$499 per worker per month. Cancel anytime.</p>
       {note && <p className="error">{note}</p>}
+      {info.subStatus === "past_due" && (
+        <div className="banner warn">
+          Your card failed — Stripe is retrying. Update it to avoid a pause.
+        </div>
+      )}
       {info.subscribed ? (
         <p>
           <span className="badge">subscription active</span>

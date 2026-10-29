@@ -306,6 +306,7 @@ export const api = {
   getBilling: (org: string) =>
     req<{
       subscribed: boolean;
+      subStatus: string;
       seats: number;
       meter: {
         month: string;

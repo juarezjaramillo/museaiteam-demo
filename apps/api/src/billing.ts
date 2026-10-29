@@ -241,7 +241,7 @@ export async function handleStripeWebhook(
     const org = meta?.org;
     if (typeof org === "string" && org) {
       await env.DB.prepare(
-        "UPDATE orgs SET subscribed = 1, stripe_customer_id = ? WHERE id = ?",
+        "UPDATE orgs SET subscribed = 1, sub_status = 'active', stripe_customer_id = ? WHERE id = ?",
       )
         .bind(
           typeof obj.customer === "string" ? obj.customer : null,
@@ -253,13 +253,61 @@ export async function handleStripeWebhook(
   } else if (evt.type === "customer.subscription.deleted") {
     if (typeof obj.customer === "string") {
       await env.DB.prepare(
-        "UPDATE orgs SET subscribed = 0 WHERE stripe_customer_id = ?",
+        "UPDATE orgs SET subscribed = 0, sub_status = 'canceled' WHERE stripe_customer_id = ?",
       )
         .bind(obj.customer)
         .run();
       await audit(env, null, "system", "billing.unsubscribed", {
         customer: obj.customer,
       });
+    }
+  } else if (evt.type === "customer.subscription.updated") {
+    if (typeof obj.customer === "string") {
+      const status = typeof obj.status === "string" ? obj.status : "";
+      const row = await env.DB.prepare(
+        "SELECT id, sub_status FROM orgs WHERE stripe_customer_id = ?",
+      )
+        .bind(obj.customer)
+        .first<{ id: string; sub_status: string }>();
+      if (row && status && row.sub_status !== status) {
+        await env.DB.prepare("UPDATE orgs SET sub_status = ? WHERE id = ?")
+          .bind(status, row.id)
+          .run();
+        await audit(env, null, "system", "billing.status", {
+          org: row.id,
+          status,
+        });
+        if (status === "past_due") {
+          await notify(env, row.id, {
+            kind: "billing.past_due",
+            title: "Card payment failed",
+            body: "Stripe is retrying. Update your card to avoid a pause — the team keeps working meanwhile.",
+          });
+        }
+        if (obj.cancel_at_period_end === true) {
+          await notify(env, row.id, {
+            kind: "billing.canceling",
+            title: "Subscription ends after this cycle",
+            body: "Access continues until the period ends. Resubscribe anytime to keep the team.",
+          });
+        }
+      }
+    }
+  } else if (evt.type === "invoice.payment_failed") {
+    if (typeof obj.customer === "string") {
+      const row = await env.DB.prepare(
+        "SELECT id FROM orgs WHERE stripe_customer_id = ?",
+      )
+        .bind(obj.customer)
+        .first<{ id: string }>();
+      if (row) {
+        await audit(env, null, "system", "billing.payment_failed", { org: row.id });
+        await notify(env, row.id, {
+          kind: "billing.past_due",
+          title: "Card payment failed",
+          body: "Stripe will retry automatically. Update your card in Billing to be safe.",
+        });
+      }
     }
   }
   return { status: 200, body: { received: true } };

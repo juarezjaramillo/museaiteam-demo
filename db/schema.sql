@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS orgs (
   trial_ends_at INTEGER NOT NULL DEFAULT 0,
   grace_used INTEGER NOT NULL DEFAULT 0,
   subscribed INTEGER NOT NULL DEFAULT 0,
+  sub_status TEXT NOT NULL DEFAULT 'none',
   idea_allowance_words INTEGER NOT NULL DEFAULT 250000,
   proposal_grace_hours INTEGER NOT NULL DEFAULT 72,
   stripe_customer_id TEXT,

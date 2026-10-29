@@ -1,0 +1,1 @@
+ALTER TABLE orgs ADD COLUMN sub_status TEXT NOT NULL DEFAULT 'none';
