@@ -4,6 +4,7 @@ export interface Env {
   ORG_MEMORY: VectorizeIndex;
   AI: Ai;
   FEED: DurableObjectNamespace;
+  RATE_LIMIT: DurableObjectNamespace;
   GOAL_RUN: Workflow;
   APP_URL: string;
   AUTH_SECRET: string;

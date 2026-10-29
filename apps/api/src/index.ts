@@ -100,8 +100,10 @@ import {
 } from "./teams.js";
 import { handleSlackEvent, verifySlack, type SlackEvent } from "./slack-in.js";
 import { guardTick, reportError, tickErrorWatch } from "./report.js";
+import { clientIp, takeHit } from "./ratelimit.js";
 
 export { RunFeed } from "./feed.js";
+export { RateLimit } from "./ratelimit.js";
 export { GoalRunWorkflow } from "./workflow.js";
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } };
@@ -409,6 +411,9 @@ app.get("/api/me/orgs", async (c) => {
 });
 
 app.post("/api/invites/:token/accept", async (c) => {
+  if (!(await takeHit(c.env, `invites:${clientIp(c.req.raw)}`, 20, 3600))) {
+    return c.json({ error: "too many requests" }, 429);
+  }
   const user = c.get("user");
   const res = await acceptInvite(c.env, c.req.param("token"), user.id, user.email ?? null);
   switch (res.outcome) {
@@ -453,6 +458,9 @@ app.post(
     const role = await memberRole(c.env, orgId, user.id);
     if (!role || !DECIDERS.includes(role as Role)) {
       return c.json({ error: "forbidden" }, 403);
+    }
+    if (!(await takeHit(c.env, `runs:${orgId}`, 30, 3600))) {
+      return c.json({ error: "too many sessions — try again in an hour" }, 429);
     }
     const gate = await trialGate(c.env, orgId);
     if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
@@ -809,6 +817,9 @@ app.get("/api/auth/:provider/connect", async (c) => {
 });
 
 app.post("/api/slack/events", async (c) => {
+  if (!(await takeHit(c.env, `slack:${clientIp(c.req.raw)}`, 120, 60))) {
+    return c.json({ error: "too many requests" }, 429);
+  }
   const raw = await c.req.text();
   const ok = await verifySlack(
     c.env,
@@ -1525,6 +1536,9 @@ app.get("/api/orgs/:org/billing", async (c) => {
 app.post("/api/orgs/:org/checkout", async (c) => {
   const org = await roleOrg(c, ...OWNERS);
   if (!org) return c.json({ error: "forbidden" }, 403);
+  if (!(await takeHit(c.env, `checkout:${org}`, 10, 3600))) {
+    return c.json({ error: "too many requests" }, 429);
+  }
   if (!stripeConfigured(c.env)) {
     return c.json({ error: "stripe not configured" }, 503);
   }
@@ -1546,7 +1560,12 @@ app.post("/api/stripe/webhook", async (c) => {
 });
 
 // Registered last: provider OAuth routes above take precedence.
-app.all("/api/auth/*", (c) => authHandler(c.req.raw, c.env));
+app.all("/api/auth/*", async (c) => {
+  if (!(await takeHit(c.env, `auth:${clientIp(c.req.raw)}`, 60, 60))) {
+    return c.json({ error: "too many requests" }, 429);
+  }
+  return authHandler(c.req.raw, c.env);
+});
 
 export default {
   fetch: app.fetch,

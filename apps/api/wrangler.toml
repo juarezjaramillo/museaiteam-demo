@@ -38,9 +38,17 @@ binding = "AI"
 name = "FEED"
 class_name = "RunFeed"
 
+[[durable_objects.bindings]]
+name = "RATE_LIMIT"
+class_name = "RateLimit"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RunFeed"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RateLimit"]
 
 [[workflows]]
 name = "goal-run"
