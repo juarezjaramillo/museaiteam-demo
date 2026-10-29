@@ -6,9 +6,13 @@ import {
 import {
   CLASSIC_ROLES,
   MAX_DEBATE_ROUNDS,
+  MCP_MAX_ARGS_BYTES,
+  MCP_MAX_STEPS,
   VOTE_TIMEOUT_MS,
   actionLabel,
   buildProof,
+  isSensitiveTool,
+  mcpCallLabel,
   nextAttempt,
   type Action,
   type Proposal,
@@ -16,7 +20,7 @@ import {
   type Vote,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
-import { autoReviewRun, runGate } from "./approvals.js";
+import { autoReviewRun, requestToolApproval, runGate } from "./approvals.js";
 import { maybeSendFairUseAlert } from "./billing.js";
 import { audit, checkLiveness, getRun, touchRun } from "./db.js";
 import { notify } from "./notify.js";
@@ -64,11 +68,22 @@ import { recallFeedback } from "./feedback.js";
 import { reportError } from "./report.js";
 import { getProviderConfig, loadToken } from "./oauth.js";
 import {
+  callTool,
+  listServers,
+  loadSecret,
+  probeServer,
+  tagsForUrl,
+  type McpServerRow,
+  type McpTool,
+} from "./mcp.js";
+import { requestSignup } from "./proposals.js";
+import {
   metricLineFor,
   runCritique,
   runDiscountPlan,
   runEngineerDiff,
   runManagerRuling,
+  runMcpStep,
   runPmSplit,
   runProductCopy,
   runProposals,
@@ -1362,6 +1377,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
         );
       }
       await this.runCloseouts(runId, run.org_id, ruling.decision);
+      await this.mcpLoopAction(run.org_id, runId, run.goal, ruling.decision);
     } else {
       await audit(this.env, runId, "workflow", "action.skipped", {
         reason: "no ruling recorded",
@@ -1375,6 +1391,174 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     });
     await audit(this.env, runId, "workflow", "run.done");
     return "ok";
+  }
+
+  /**
+   * MCP tool loop: the one place hires wield outside tools. Reads on
+   * trusted servers run free inside the step cap; a sensitive call or
+   * first use of a pending server asks the founder and ends the loop —
+   * v1 resumes nothing, the approval executes the single gated call and
+   * the hire's next session sees the result. A retried act step never
+   * replays: any mcp.tool row means the loop already ran. The loop never
+   * fails the run: dead servers and bad calls become honest proof.
+   */
+  private async mcpLoopAction(
+    orgId: string,
+    runId: string,
+    goal: string,
+    decision: string,
+  ): Promise<void> {
+    const prior = await this.env.DB.prepare(
+      "SELECT id FROM actions WHERE run_id = ? AND kind = 'mcp.tool' LIMIT 1",
+    )
+      .bind(runId)
+      .first<{ id: string }>();
+    if (prior) return;
+    const servers = (await listServers(this.env, orgId)).filter(
+      (s) => s.status === "trusted" || s.status === "pending",
+    );
+    if (!servers.length) return;
+    const shelf: Array<{ server: McpServerRow; tools: McpTool[] }> = [];
+    for (const server of servers) {
+      try {
+        const secret =
+          server.auth === "none" ? null : await loadSecret(this.env, server);
+        const probe = await probeServer(server.url, secret, server.auth, server.auth_name);
+        shelf.push({ server, tools: probe.tools });
+      } catch (err) {
+        await audit(this.env, runId, "workflow", "mcp.server_unreachable", {
+          server: server.name,
+          error: String(err).slice(0, 160),
+        });
+      }
+    }
+    if (!shelf.length) return;
+    const shelfText = shelf
+      .map(
+        ({ server, tools }) =>
+          `${server.name}${server.status === "pending" ? " (needs your OK on first use)" : ""}: ` +
+          (tools.map((t) => t.name).join(", ") || "(no tools)"),
+      )
+      .join("\n");
+    let history = "";
+    let executed = 0;
+    for (let step = 0; step < MCP_MAX_STEPS; step++) {
+      const run = await getRun(this.env, runId);
+      if (!run || run.kill_flag === 1) return;
+      let plan: { done: boolean; calls: Array<{ server: string; tool: string; args: Record<string, unknown> }>; tokens: number };
+      try {
+        plan = await runMcpStep(this.env, { goal, decision, shelf: shelfText, history });
+      } catch (err) {
+        await audit(this.env, runId, "workflow", "mcp.plan_failed", {
+          error: String(err).slice(0, 160),
+        });
+        return;
+      }
+      await touchRun(this.env, runId, { tokens_used: plan.tokens });
+      if (plan.done || !plan.calls.length) break;
+      for (const call of plan.calls) {
+        const found = shelf.find(
+          ({ server }) => server.name.toLowerCase() === call.server.toLowerCase(),
+        );
+        if (!found) {
+          await this.recordAction(runId, "mcp.tool", call.server.slice(0, 120), "failed", undefined, {
+            error: "the team named a server that is not connected",
+          });
+          history += `\n- ${call.server}.${call.tool}: failed (unknown server)`;
+          continue;
+        }
+        const tool = found.tools.find((t) => t.name === call.tool);
+        if (!tool) {
+          await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, call.tool), "failed", undefined, {
+            server: found.server.name,
+            error: "the team named a tool that server does not have",
+          });
+          history += `\n- ${found.server.name}.${call.tool}: failed (unknown tool)`;
+          continue;
+        }
+        const args = call.args ?? {};
+        if (JSON.stringify(args).length > MCP_MAX_ARGS_BYTES) {
+          await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "skipped", undefined, {
+            server: found.server.name,
+            tool: tool.name,
+            error: "arguments too large",
+          });
+          continue;
+        }
+        if (found.server.status === "pending") {
+          await requestToolApproval(this.env, {
+            orgId,
+            runId,
+            goalId: run.goal_id,
+            actionId: null,
+            server: found.server,
+            tool: null,
+            args: null,
+          });
+          await audit(this.env, runId, "workflow", "mcp.first_use_asked", {
+            server: found.server.name,
+          });
+          return;
+        }
+        if (isSensitiveTool(tool.name, tool.annotations, tagsForUrl(found.server.url))) {
+          const actionId = await this.recordAction(
+            runId,
+            "mcp.tool",
+            mcpCallLabel(found.server.name, tool.name),
+            "pending",
+            undefined,
+            {
+              server: found.server.name,
+              tool: tool.name,
+              url: found.server.url,
+              args: JSON.stringify(args).slice(0, 1000),
+            },
+          );
+          await requestToolApproval(this.env, {
+            orgId,
+            runId,
+            goalId: run.goal_id,
+            actionId,
+            server: found.server,
+            tool: tool.name,
+            args,
+          });
+          await audit(this.env, runId, "workflow", "mcp.sensitive_asked", {
+            server: found.server.name,
+            tool: tool.name,
+          });
+          return;
+        }
+        try {
+          const result = await callTool(this.env, found.server, tool.name, args);
+          executed++;
+          await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "done", undefined, {
+            server: found.server.name,
+            tool: tool.name,
+            url: found.server.url,
+            result: result.slice(0, 500),
+            readOnly: tool.annotations?.readOnlyHint === true,
+          });
+          history += `\n- ${found.server.name}.${tool.name}: ${result.slice(0, 400)}`;
+        } catch (err) {
+          const msg = String(err).slice(0, 300);
+          const needsAccount =
+            err instanceof Error && /refused|auth|cannot be read|key/i.test(msg) &&
+            found.server.auth !== "none";
+          if (needsAccount) {
+            await requestSignup(this.env, orgId, found.server, msg).catch(() => {});
+          }
+          await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "failed", undefined, {
+            server: found.server.name,
+            tool: tool.name,
+            url: found.server.url,
+            error: msg,
+          });
+          history += `\n- ${found.server.name}.${tool.name}: failed (${msg.slice(0, 200)})`;
+        }
+      }
+    }
+    await audit(this.env, runId, "workflow", "mcp.loop_done", { executed });
   }
 
   /**

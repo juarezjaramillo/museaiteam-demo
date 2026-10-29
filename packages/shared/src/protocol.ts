@@ -83,6 +83,7 @@ export const ActionKind = z.enum([
   "notion.create_page",
   "notion.archive_page",
   "notion.run_page",
+  "mcp.tool",
 ]);
 export type ActionKind = z.infer<typeof ActionKind>;
 

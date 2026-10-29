@@ -41,7 +41,10 @@ CREATE TABLE IF NOT EXISTS approvals (
   revision_run_id TEXT REFERENCES runs(id),
   decided_by TEXT REFERENCES users(id),
   decided_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  mcp_server_id TEXT REFERENCES mcp_servers(id),
+  mcp_tool TEXT,
+  mcp_args TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS approvals_one_pending_pre
   ON approvals(run_id) WHERE kind = 'pre' AND status = 'pending';
@@ -380,4 +383,29 @@ CREATE TABLE IF NOT EXISTS idea_spend (
   night TEXT NOT NULL,
   words INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (org_id, night)
+);
+
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  auth TEXT NOT NULL DEFAULT 'none',
+  auth_name TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'founder',
+  status TEXT NOT NULL DEFAULT 'pending',
+  spend_cap_cents INTEGER NOT NULL DEFAULT 0,
+  added_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(org_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_org ON mcp_servers(org_id);
+
+CREATE TABLE IF NOT EXISTS mcp_credentials (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  server_id TEXT NOT NULL REFERENCES mcp_servers(id),
+  label TEXT NOT NULL DEFAULT '',
+  secret_enc TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(org_id, server_id)
 );

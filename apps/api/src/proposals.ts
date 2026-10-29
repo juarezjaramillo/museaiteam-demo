@@ -4,6 +4,7 @@ import { audit } from "./db.js";
 import { runPropose } from "./agents.js";
 import { chargeIdea, ideaBudget } from "./allowance.js";
 import { BadGoal, createGoal, getGoal } from "./goals.js";
+import type { McpServerRow } from "./mcp.js";
 import { recall } from "./memory.js";
 import { notify } from "./notify.js";
 import { tryDMOwner } from "./slack-in.js";
@@ -86,6 +87,12 @@ async function advanceDue(env: Env, orgId: string): Promise<void> {
  * manual, so they always satisfy the second bound.
  */
 async function startProposal(env: Env, orgId: string, p: ProposalRow): Promise<void> {
+  // Signups never auto-start: creating the account is the founder's
+  // hands, so silence holds the idea instead of starting a session.
+  if (p.kind === "signup") {
+    await holdProposal(env, orgId, p, "creating the account needs you");
+    return;
+  }
   const budget = await ideaBudget(env, orgId);
   if (budget.left <= 0) {
     await holdProposal(env, orgId, p, "nightly idea budget spent");
@@ -254,6 +261,66 @@ export async function listProposals(env: Env, orgId: string): Promise<ProposalRo
   return rows.results ?? [];
 }
 
+/**
+ * The loop calls this when a server answers "who are you": the team
+ * needs an account it cannot create itself. One pending signup per
+ * server — repeats while the founder thinks are dropped, not stacked.
+ */
+export async function requestSignup(
+  env: Env,
+  orgId: string,
+  server: McpServerRow,
+  detail: string,
+): Promise<string | null> {
+  const title = `Connect ${server.name}`;
+  const open = await env.DB.prepare(
+    `SELECT id FROM proposals_out WHERE org_id = ? AND kind = 'signup'
+     AND title = ? AND status IN ('proposed', 'reminded') LIMIT 1`,
+  )
+    .bind(orgId, title)
+    .first<{ id: string }>();
+  if (open) return null;
+  const id = crypto.randomUUID();
+  const body = [
+    `The team tried to use ${server.name} (${server.url}) and was asked to sign in.`,
+    server.spend_cap_cents > 0
+      ? `Paid trials are OK up to $${(server.spend_cap_cents / 100).toFixed(2)} on this server.`
+      : "Paid plans need your explicit OK — the cap on this server is $0.",
+    `Server said: ${detail.slice(0, 200)}`,
+  ].join(" ");
+  await env.DB.prepare(
+    `INSERT INTO proposals_out (id, org_id, kind, goal_id, title, body, status, remind_at, start_at)
+     VALUES (?, ?, 'signup', NULL, ?, ?, 'proposed', datetime('now', '+1 day'), datetime('now', '+3 days'))`,
+  )
+    .bind(id, orgId, title, body)
+    .run();
+  await notify(env, orgId, {
+    kind: "proposal.proposed",
+    title: `New idea: ${title}`.slice(0, 120),
+    body: `${body.slice(0, 200)} Approve for guided steps.`,
+    link: `proposal:${id}`,
+  });
+  await tryDMOwner(env, orgId, `New idea: ${title}\n${body.slice(0, 300)}`).catch(() => {});
+  await audit(env, null, "system", "proposal.signup_proposed", { org: orgId, id });
+  return id;
+}
+
+/** Approve on a signup hands the founder guided-connect steps, not a session. */
+async function startSignup(env: Env, orgId: string, p: ProposalRow): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE proposals_out SET status = 'started', decided_at = datetime('now') WHERE id = ?",
+  )
+    .bind(p.id)
+    .run();
+  await notify(env, orgId, {
+    kind: "proposal.started",
+    title: `Connect it: ${p.title}`.slice(0, 120),
+    body: "Three steps: 1) create the account on the service's site, 2) copy its API key, 3) paste it under Setup → Tool servers. The team picks it up from the next session.",
+    link: `proposal:${p.id}`,
+  });
+  await audit(env, null, "human", "proposal.signup_approved", { org: orgId, id: p.id });
+}
+
 /** Founder decision on an idea: approve starts now, reject holds it. */
 export async function decideProposal(
   env: Env,
@@ -269,6 +336,10 @@ export async function decideProposal(
     .first<ProposalRow>();
   if (!row) return "notfound";
   if (row.status !== "proposed" && row.status !== "reminded") return "decided";
+  if (row.kind === "signup" && decision === "approve") {
+    await startSignup(env, orgId, row);
+    return "ok";
+  }
   if (decision === "reject") {
     await env.DB.prepare(
       "UPDATE proposals_out SET status = 'rejected', decided_at = datetime('now') WHERE id = ?",

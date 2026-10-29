@@ -441,6 +441,61 @@ export async function runTicketThemes(
   return { tactics: res.data.tactics, tokens: res.tokensUsed };
 }
 
+const McpStep = z.object({
+  done: z.boolean(),
+  calls: z
+    .array(
+      z.object({
+        server: z.string().max(80),
+        tool: z.string().max(80),
+        args: z.record(z.unknown()).default({}),
+      }),
+    )
+    .max(3),
+});
+
+export interface McpStepCall {
+  server: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/**
+ * MCP loop planner: given the goal, the tool shelf, and what prior
+ * calls returned, plans the next calls or finishes. Server names are
+ * matched case-insensitively against trusted servers by the caller —
+ * the model never sees row ids.
+ */
+export async function runMcpStep(
+  env: Env,
+  input: { goal: string; decision: string; shelf: string; history: string },
+): Promise<{ done: boolean; calls: McpStepCall[]; tokens: number }> {
+  const client = new SparkClient(env);
+  const user = [
+    `Goal: ${input.goal}`,
+    `Decision: ${input.decision}`,
+    "",
+    `Tool shelf (server: tool — what it does):\n${input.shelf || "(no tools)"}`,
+    input.history ? `\nEarlier calls and results:\n${input.history}` : "",
+    "",
+    "Plan the next tool calls that move the goal forward, or finish. At most 3 calls. Prefer reads over writes; writes that spend, subscribe, delete, or share need the founder's approval and pause the loop, so only ask for one when it is truly needed.",
+    'Reply JSON: {"done": true|false, "calls": [{"server": "<name>", "tool": "<name>", "args": {}}]}.',
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const res = await client.chat(McpStep, {
+    system:
+      "You are the team's analyst. You use outside tools to check facts and gather evidence for the goal. You never invent results and you stop when you have enough.",
+    user,
+    temperature: MANAGER_TEMPERATURE,
+  });
+  return {
+    done: res.data.done,
+    calls: res.data.calls.map((c) => ({ server: c.server, tool: c.tool, args: c.args ?? {} })),
+    tokens: res.tokensUsed,
+  };
+}
+
 const Proposal = z.object({
   kind: z.enum(["next-work", "new-goal"]),
   goalId: z.string().nullable(),

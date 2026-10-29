@@ -166,12 +166,15 @@ export function RunDetailView({
                         {proof.before && proof.after && (
                           <span className="dim"> ({proof.before} → {proof.after})</span>
                         )}
+                        {!proof.before && proof.after && (
+                          <span className="dim"> — {proof.after}</span>
+                        )}
                       </p>
                     ) : a.status === "done" ? (
                       <p className="dim">no proof recorded</p>
                     ) : null}
-                    {href ? (
-                      <a href={href} target="_blank" rel="noreferrer">
+                    {href || proof?.url ? (
+                      <a href={(href ?? proof!.url)!} target="_blank" rel="noreferrer">
                         Open it ↗
                       </a>
                     ) : (

@@ -93,6 +93,12 @@ export function buildProof(
     case "notion.create_page":
     case "notion.run_page":
       return { ...base, summary: `Wrote ${clip(payload.title) ?? "a log page"}` };
+    case "mcp.tool":
+      return {
+        ...base,
+        summary: `Used ${clip(payload.tool) ?? "a tool"} on ${clip(payload.server) ?? "an outside service"}`,
+        after: clip(payload.result, 200),
+      };
     default:
       return base;
   }

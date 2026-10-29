@@ -30,6 +30,7 @@ const OWNER_FOR_SYSTEM: Record<string, string> = {
   shopify: "marketer",
   hubspot: "analyst",
   notion: "pm",
+  mcp: "analyst",
 };
 
 /** Seat role that owns an action kind, via the system that ran it. */

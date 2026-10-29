@@ -1,6 +1,177 @@
 import { useEffect, useState } from "react";
 import { LIVE_PROVIDERS, SEAT_ROLES } from "@museaiteam/shared";
-import { api, type GuardrailRow, type TeamRow } from "../api.js";
+import { api, type GuardrailRow, type McpCatalogEntry, type McpServer, type TeamRow } from "../api.js";
+
+function ToolServers({ org }: { org: string }) {
+  const [servers, setServers] = useState<McpServer[]>([]);
+  const [catalog, setCatalog] = useState<McpCatalogEntry[]>([]);
+  const [url, setUrl] = useState("");
+  const [secret, setSecret] = useState("");
+  const [msg, setMsg] = useState("");
+
+  async function load() {
+    const r = await api.getMcp(org);
+    setServers(r.servers);
+    setCatalog(r.catalog);
+  }
+
+  useEffect(() => {
+    load().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [org]);
+
+  async function add(body: Record<string, unknown>) {
+    setMsg("");
+    try {
+      const r = await api.addMcp(org, body);
+      setMsg(
+        r.server.status === "trusted"
+          ? `Added ${r.server.name} — ${r.tools.length} tools ready.`
+          : `Added ${r.server.name} — it asks for trust on first use.`,
+      );
+      setUrl("");
+      setSecret("");
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  async function saveSecret(id: string) {
+    setMsg("");
+    try {
+      await api.putMcpSecret(org, id, secret);
+      setMsg("Key saved.");
+      setSecret("");
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  async function saveCap(id: string, dollars: string) {
+    setMsg("");
+    try {
+      await api.putMcpCap(org, id, Math.round(Number(dollars) * 100) || 0);
+      setMsg("Cap saved.");
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  async function trust(id: string, status: "trusted" | "rejected") {
+    setMsg("");
+    try {
+      await api.trustMcp(org, id, status);
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  async function remove(id: string) {
+    setMsg("");
+    try {
+      await api.deleteMcp(org, id);
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  return (
+    <div>
+      <p className="dim">
+        Extra tools for the team, beyond the built-in connections. Sensitive
+        steps always ask you first.
+      </p>
+      {servers.map((s) => (
+        <div className="conn-row" key={s.id}>
+          <div>
+            <strong>{s.name}</strong>{" "}
+            <span className="dim">{s.url}</span>{" "}
+            {s.status === "trusted" ? (
+              <span className="badge soft">trusted</span>
+            ) : s.status === "rejected" ? (
+              <span className="badge warn">blocked</span>
+            ) : (
+              <span className="badge warn">asks on first use</span>
+            )}{" "}
+            {s.auth !== "none" && !s.hasSecret && (
+              <span className="badge warn">needs key</span>
+            )}
+          </div>
+          <div className="row">
+            {s.auth !== "none" && !s.hasSecret && (
+              <span>
+                <input
+                  type="password"
+                  placeholder="API key"
+                  value={secret}
+                  onChange={(e) => setSecret(e.target.value)}
+                />{" "}
+                <button className="sm" onClick={() => saveSecret(s.id)} disabled={!secret}>
+                  Save key
+                </button>
+              </span>
+            )}
+            <label>
+              Max paid trials ${" "}
+              <input
+                className="narrow"
+                defaultValue={(s.spendCapCents / 100).toFixed(0)}
+                key={s.id + s.spendCapCents}
+                onBlur={(e) => saveCap(s.id, e.target.value)}
+                title="0 = paid plans always ask"
+              />
+            </label>
+            {s.status === "pending" && (
+              <span>
+                <button className="sm" onClick={() => trust(s.id, "trusted")}>Trust</button>{" "}
+                <button className="sm" onClick={() => trust(s.id, "rejected")}>Block</button>
+              </span>
+            )}
+            {s.status === "rejected" && (
+              <button className="sm" onClick={() => trust(s.id, "trusted")}>Trust</button>
+            )}
+            <button className="link" onClick={() => remove(s.id)}>Remove</button>
+          </div>
+        </div>
+      ))}
+      {servers.length === 0 && <p className="dim">No extra tool servers yet.</p>}
+      <h3>Ready-made</h3>
+      {catalog.map((c) => (
+        <div className="conn-row" key={c.id}>
+          <div>
+            <strong>{c.name}</strong> <span className="dim">{c.blurb}</span>
+          </div>
+          <button
+            className="sm"
+            disabled={servers.some((s) => s.url === c.url)}
+            onClick={() => add({ catalogId: c.id })}
+          >
+            {servers.some((s) => s.url === c.url) ? "Added" : "Add"}
+          </button>
+        </div>
+      ))}
+      <h3>Add your own</h3>
+      <div className="row">
+        <input
+          placeholder="https://…/mcp"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          title="Remote servers only — paste the server's web address"
+        />
+        <button className="sm" onClick={() => add({ url })} disabled={!url.trim()}>
+          Add
+        </button>
+      </div>
+      <p className="dim">Remote servers only: paste the server's web address, not a command to run.</p>
+      {msg && <p>{msg}</p>}
+    </div>
+  );
+}
 
 function GuardEditor({
   org,
@@ -328,6 +499,9 @@ export function Setup({ org }: { org: string }) {
         </div>
       </details>
       {note && <p>{note}</p>}
+
+      <h2>Tool servers</h2>
+      <ToolServers org={org} />
 
       <h2>Teams</h2>
       <p className="dim">

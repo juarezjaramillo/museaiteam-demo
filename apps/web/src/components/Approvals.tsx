@@ -86,6 +86,17 @@ export function Approvals({
     }
   }
 
+  async function decideTool(id: string, decision: "approve" | "reject") {
+    setMsg("");
+    try {
+      await api.decideTool(org, id, decision);
+      setMsg(decision === "approve" ? "Tool call approved" : "Tool call rejected");
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
   const pendCount = rows.filter((a) => a.status === "pending").length;
 
   return (
@@ -119,16 +130,20 @@ export function Approvals({
               <li key={p.id}>
                 <div className="card-head">
                   <strong>{p.title}</strong>
-                  <span className="dim">{p.kind === "new-goal" ? "new goal" : p.kind}</span>
+                  <span className="dim">{p.kind === "new-goal" ? "new goal" : p.kind === "signup" ? "needs an account" : p.kind}</span>
                 </div>
                 <p className="dim">{p.body.slice(0, 200)}</p>
-                <p className="dim">Starts on its own {p.start_at.slice(5, 16).replace("T", " ")} unless you answer.</p>
+                {p.kind === "signup" ? (
+                  <p className="dim">This one waits for you — it never starts on its own.</p>
+                ) : (
+                  <p className="dim">Starts on its own {p.start_at.slice(5, 16).replace("T", " ")} unless you answer.</p>
+                )}
                 <div className="row">
                   <button
                     className="primary sm"
                     onClick={() => decideIdea(p.id, "approve")}
                   >
-                    Start now
+                    {p.kind === "signup" ? "Show me the steps" : "Start now"}
                   </button>
                   <button className="danger sm" onClick={() => decideIdea(p.id, "reject")}>
                     Reject
@@ -163,6 +178,14 @@ export function Approvals({
                 · {actionLabel(a.actionKind)} {a.actionTarget}
               </span>
             )}
+            {a.mcpServerId && (
+              <p className="dim">
+                {a.mcpTool
+                  ? `Tool call: ${a.mcpServerName ?? "a server"} → ${a.mcpTool.replace(/_/g, " ")}`
+                  : `First use: the team wants to start using ${a.mcpServerName ?? "a new tool server"}`}
+              </p>
+            )}
+            {a.mcpArgs && <p className="dim">Details: {a.mcpArgs.slice(0, 200)}</p>}
             {a.runGoal && <p className="dim">{a.runGoal.slice(0, 140)}</p>}
             {a.note && <p>Note: {a.note}</p>}
             {a.revisionRunId && (
@@ -179,7 +202,18 @@ export function Approvals({
                 <button className="danger sm" onClick={() => decide(a.runId, "reject")}>Reject</button>
               </div>
             )}
-            {a.status === "pending" && a.kind === "post" && a.actionId && (
+            {a.status === "pending" && a.mcpServerId && (
+              <div className="row">
+                <button className="primary sm" onClick={() => decideTool(a.id, "approve")}>
+                  {a.mcpTool ? "Run it" : "Trust it"}
+                </button>
+                <button className="danger sm" onClick={() => decideTool(a.id, "reject")}>
+                  {a.mcpTool ? "Skip it" : "Block it"}
+                </button>
+                <button className="link" onClick={() => onRun(a.runId)}>Open session</button>
+              </div>
+            )}
+            {a.status === "pending" && a.kind === "post" && a.actionId && !a.mcpServerId && (
               <div className="row">
                 <button className="primary sm" onClick={() => approveOne(a.runId, a.actionId!)}>Approve</button>
                 <button className="link" onClick={() => onRun(a.runId)}>Open session</button>

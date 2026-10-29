@@ -17,6 +17,8 @@ export interface FakeTables {
   proposals_out: Row[];
   stripe_events: Row[];
   orgs: Row[];
+  mcp_servers: Row[];
+  mcp_credentials: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -31,6 +33,8 @@ export function blankTables(): FakeTables {
     proposals_out: [],
     stripe_events: [],
     orgs: [],
+    mcp_servers: [],
+    mcp_credentials: [],
   };
 }
 
@@ -98,9 +102,37 @@ export class FakeDB {
           if (q.startsWith("SELECT words FROM idea_spend WHERE org_id = ? AND night = ?")) {
             return null;
           }
+          if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ? AND id = ?")) {
+            return ((t.mcp_servers.find((r) => r.org_id === p[0] && r.id === p[1]) as T) ?? null);
+          }
+          if (q.startsWith("SELECT id FROM mcp_servers WHERE org_id = ? AND url = ?")) {
+            const r = t.mcp_servers.find((x) => x.org_id === p[0] && x.url === p[1]);
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT secret_enc FROM mcp_credentials WHERE org_id = ? AND server_id = ?")) {
+            const r = t.mcp_credentials.find((x) => x.org_id === p[0] && x.server_id === p[1]);
+            return ((r ? { secret_enc: r.secret_enc } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id FROM mcp_credentials WHERE org_id = ? AND server_id = ?")) {
+            const r = t.mcp_credentials.find((x) => x.org_id === p[0] && x.server_id === p[1]);
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id, run_id, action_id, status, mcp_server_id, mcp_tool, mcp_args FROM approvals")) {
+            const r = t.approvals.find((x) => x.id === p[0] && x.org_id === p[1] && x.mcp_server_id);
+            return ((r ?? null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id FROM proposals_out WHERE org_id = ? AND kind = 'signup'")) {
+            const r = t.proposals_out.find(
+              (x) => x.org_id === p[0] && x.kind === "signup" && x.title === p[1] && (x.status === "proposed" || x.status === "reminded"),
+            );
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
           throw new Error(`FakeDB.first: unhandled: ${q.slice(0, 90)}`);
         },
         all: async <T>(): Promise<{ results: T[] }> => {
+          if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ?")) {
+            return { results: t.mcp_servers.filter((r) => r.org_id === p[0]) as T[] };
+          }
           if (q.includes("FROM actions") && q.includes("run_id = ?")) {
             if (q.includes("NOT IN")) {
               const reviewed = new Set(
@@ -119,8 +151,12 @@ export class FakeDB {
         run: async (): Promise<{ meta: { changes: number } }> => {
           if (q.startsWith("INSERT INTO approvals")) {
             const status = q.includes("'approved'") ? "approved" : "pending";
-            const [id, org_id, run_id, goal_id, action_id] = p as string[];
+            const [id, org_id, run_id, goal_id, action_id] = p as (string | null)[];
+            const [mcp_server_id, mcp_tool, mcp_args] = q.includes("mcp_server_id")
+              ? (p.slice(5, 8) as (string | null)[])
+              : [null, null, null];
             if (
+              q.includes("ON CONFLICT") &&
               status === "pending" &&
               t.approvals.some(
                 (r) => r.run_id === run_id && r.action_id === action_id && r.status === "pending",
@@ -128,8 +164,22 @@ export class FakeDB {
             ) {
               return { meta: { changes: 0 } };
             }
-            t.approvals.push({ id, org_id, run_id, goal_id, kind: "post", action_id, status });
+            t.approvals.push({
+              id, org_id, run_id, goal_id, kind: "post", action_id, status,
+              mcp_server_id: mcp_server_id ?? null,
+              mcp_tool: mcp_tool ?? null,
+              mcp_args: mcp_args ?? null,
+            });
             return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE approvals SET status = ?, decided_by = ?")) {
+            const row = t.approvals.find((r) => r.id === p[2] && r.status === "pending");
+            if (row) {
+              row.status = p[0];
+              row.decided_by = p[1];
+              return { meta: { changes: 1 } };
+            }
+            return { meta: { changes: 0 } };
           }
           if (q.startsWith("UPDATE approvals SET status = 'approved'")) {
             const row = t.approvals.find((r) => r.id === p[2] && r.status === "pending");
@@ -206,6 +256,74 @@ export class FakeDB {
           if (q.startsWith("UPDATE actions SET status = 'reverted' WHERE id = ?")) {
             const r = t.actions.find((x) => x.id === p[0]);
             if (r) r.status = "reverted";
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE actions SET status = 'skipped' WHERE id = ?")) {
+            const r = t.actions.find((x) => x.id === p[0]);
+            if (r) r.status = "skipped";
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE actions SET status = 'done', payload = ?, proof = ? WHERE id = ?")) {
+            const r = t.actions.find((x) => x.id === p[2]);
+            if (r) {
+              r.status = "done";
+              r.payload = p[0];
+              r.proof = p[1];
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE actions SET status = 'failed', payload = ? WHERE id = ?")) {
+            const r = t.actions.find((x) => x.id === p[1]);
+            if (r) {
+              r.status = "failed";
+              r.payload = p[0];
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO mcp_servers")) {
+            const [id, org_id, name, url, auth, auth_name, source, status] = p as string[];
+            t.mcp_servers.push({ id, org_id, name, url, auth, auth_name, source, status, spend_cap_cents: 0 });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM mcp_credentials")) {
+            t.mcp_credentials = t.mcp_credentials.filter(
+              (x) => !(x.org_id === p[0] && x.server_id === p[1]),
+            );
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM mcp_servers")) {
+            const n = t.mcp_servers.length;
+            t.mcp_servers = t.mcp_servers.filter((x) => !(x.org_id === p[0] && x.id === p[1]));
+            return { meta: { changes: n - t.mcp_servers.length } };
+          }
+          if (q.startsWith("UPDATE mcp_servers SET status = ?")) {
+            const r = t.mcp_servers.find((x) => x.org_id === p[1] && x.id === p[2]);
+            if (r) r.status = p[0];
+            return { meta: { changes: r ? 1 : 0 } };
+          }
+          if (q.startsWith("UPDATE mcp_servers SET spend_cap_cents = ?")) {
+            const r = t.mcp_servers.find((x) => x.org_id === p[1] && x.id === p[2]);
+            if (r) r.spend_cap_cents = p[0];
+            return { meta: { changes: r ? 1 : 0 } };
+          }
+          if (q.startsWith("INSERT INTO mcp_credentials")) {
+            const [id, org_id, server_id, label, secret_enc] = p as string[];
+            t.mcp_credentials = t.mcp_credentials.filter(
+              (x) => !(x.org_id === org_id && x.server_id === server_id),
+            );
+            t.mcp_credentials.push({ id, org_id, server_id, label, secret_enc });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE mcp_credentials SET secret_enc = ?")) {
+            const r = t.mcp_credentials.find((x) => x.org_id === p[1] && x.server_id === p[2]);
+            if (r) r.secret_enc = p[0];
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO proposals_out (id, org_id, kind, goal_id, title, body, status, remind_at, start_at)")) {
+            t.proposals_out.push({
+              id: p[0], org_id: p[1], kind: "signup", goal_id: null,
+              title: p[2], body: p[3], status: "proposed",
+            });
             return { meta: { changes: 1 } };
           }
           throw new Error(`FakeDB.run: unhandled: ${q.slice(0, 90)}`);

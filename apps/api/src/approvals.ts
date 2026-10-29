@@ -1,13 +1,16 @@
 import {
   actionLabel,
+  buildProof,
   gateVerdict,
   hasInverse,
   isMoneyKind,
+  mcpCallLabel,
   resubmitOutcome,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { audit, getRun, touchRun } from "./db.js";
 import { addEvent, getGoal } from "./goals.js";
+import { callTool, getServer, setTrust, type McpServerRow } from "./mcp.js";
 import { notify } from "./notify.js";
 import { createWorkRun, settleFailedRun } from "./staffing.js";
 
@@ -82,6 +85,10 @@ export interface ApprovalView {
   runGoal: string | null;
   actionKind: string | null;
   actionTarget: string | null;
+  mcpServerId: string | null;
+  mcpServerName: string | null;
+  mcpTool: string | null;
+  mcpArgs: string | null;
 }
 
 export async function listApprovals(
@@ -95,9 +102,12 @@ export async function listApprovals(
        a.status AS status, a.resubmits AS resubmits, a.note AS note,
        a.revision_run_id AS revisionRunId, a.decided_by AS decidedBy,
        a.decided_at AS decidedAt, a.created_at AS createdAt,
+       a.mcp_server_id AS mcpServerId, a.mcp_tool AS mcpTool,
+       a.mcp_args AS mcpArgs, ms.name AS mcpServerName,
        r.goal AS runGoal, act.kind AS actionKind, act.target AS actionTarget
      FROM approvals a JOIN runs r ON r.id = a.run_id
      LEFT JOIN actions act ON act.id = a.action_id
+     LEFT JOIN mcp_servers ms ON ms.id = a.mcp_server_id
      WHERE a.org_id = ? ${status ? "AND a.status = ?" : ""}
      ORDER BY a.created_at DESC, a.rowid DESC LIMIT 100`,
   )
@@ -431,6 +441,173 @@ export async function requestChanges(
 }
 
 /**
+ * Ask the founder about one gated tool call. Two shapes: first use of
+ * a pending server (no action yet — approve trusts the server, the call
+ * itself does not run) or a sensitive call (pending action attached —
+ * approve runs it now). v1 resumes nothing: the loop already ended.
+ */
+export async function requestToolApproval(
+  env: Env,
+  input: {
+    orgId: string;
+    runId: string;
+    goalId: string | null;
+    actionId: string | null;
+    server: McpServerRow;
+    tool: string | null;
+    args: Record<string, unknown> | null;
+  },
+): Promise<string> {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO approvals (id, org_id, run_id, goal_id, kind, action_id,
+       status, mcp_server_id, mcp_tool, mcp_args)
+     VALUES (?, ?, ?, ?, 'post', ?, 'pending', ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      input.orgId,
+      input.runId,
+      input.goalId,
+      input.actionId,
+      input.server.id,
+      input.tool,
+      input.args ? JSON.stringify(input.args).slice(0, 2000) : null,
+    )
+    .run();
+  const first = !input.tool;
+  await notify(env, input.orgId, {
+    kind: "approval.requested",
+    title: first
+      ? `New tool wants in: ${input.server.name}`
+      : `Sensitive step: ${mcpCallLabel(input.server.name, input.tool ?? "")}`.slice(0, 120),
+    body: first
+      ? "The team wants to use this for the first time. Approve to trust it, reject to block it."
+      : "The team paused and wants your call before running this.",
+  });
+  return id;
+}
+
+export type ToolDecision = "approve" | "reject";
+
+/**
+ * Decide a gated tool call. Claim-first like pre-approvals so racing
+ * taps can't both win. Approve runs the single gated call (or trusts
+ * the server on first use); reject skips the call, or blocks the server
+ * on first use. Either way the loop does not resume.
+ */
+export async function decideToolApproval(
+  env: Env,
+  input: { approvalId: string; orgId: string; userId: string; decision: ToolDecision },
+): Promise<"ok" | "notfound" | "decided"> {
+  const row = await env.DB.prepare(
+    `SELECT id, run_id, action_id, status, mcp_server_id, mcp_tool, mcp_args
+     FROM approvals WHERE id = ? AND org_id = ? AND mcp_server_id IS NOT NULL`,
+  )
+    .bind(input.approvalId, input.orgId)
+    .first<{
+      id: string;
+      run_id: string;
+      action_id: string | null;
+      status: string;
+      mcp_server_id: string;
+      mcp_tool: string | null;
+      mcp_args: string | null;
+    }>();
+  if (!row) return "notfound";
+  if (row.status !== "pending") return "decided";
+  const claimed = await env.DB.prepare(
+    `UPDATE approvals SET status = ?, decided_by = ?, decided_at = datetime('now')
+     WHERE id = ? AND status = 'pending'`,
+  )
+    .bind(input.decision === "approve" ? "approved" : "rejected", input.userId, row.id)
+    .run();
+  if ((claimed.meta.changes ?? 0) !== 1) return "decided";
+  const run = await getRun(env, row.run_id);
+  const server = run ? await getServer(env, input.orgId, row.mcp_server_id) : null;
+  if (!run || !server) {
+    if (row.action_id) {
+      await env.DB.prepare("UPDATE actions SET status = 'skipped' WHERE id = ?")
+        .bind(row.action_id)
+        .run();
+    }
+    await audit(env, row.run_id, "human", "mcp.tool_gone", { approval: row.id });
+    return "ok";
+  }
+  if (input.decision === "reject") {
+    if (row.action_id) {
+      await env.DB.prepare("UPDATE actions SET status = 'skipped' WHERE id = ?")
+        .bind(row.action_id)
+        .run();
+    } else {
+      await setTrust(env, input.orgId, server.id, "rejected");
+    }
+    await audit(env, run.id, "human", "mcp.tool_rejected", {
+      server: server.name,
+      tool: row.mcp_tool ?? "(first use)",
+    });
+    return "ok";
+  }
+  if (!row.mcp_tool) {
+    await setTrust(env, input.orgId, server.id, "trusted");
+    await notify(env, input.orgId, {
+      kind: "approval.decided",
+      title: `Trusted: ${server.name}`,
+      body: "The team can use it from the next session on.",
+    });
+    await audit(env, run.id, "human", "mcp.server_trusted", { server: server.name });
+    return "ok";
+  }
+  let args: Record<string, unknown> = {};
+  try {
+    args = row.mcp_args ? (JSON.parse(row.mcp_args) as Record<string, unknown>) : {};
+  } catch {
+    args = {};
+  }
+  try {
+    const result = await callTool(env, server, row.mcp_tool, args);
+    const payload = {
+      server: server.name,
+      tool: row.mcp_tool,
+      url: server.url,
+      result: result.slice(0, 500),
+      readOnly: false,
+    };
+    const proof = buildProof("mcp.tool", mcpCallLabel(server.name, row.mcp_tool), "done", actionLabel("mcp.tool"), undefined, payload);
+    if (row.action_id) {
+      await env.DB.prepare(
+        "UPDATE actions SET status = 'done', payload = ?, proof = ? WHERE id = ?",
+      )
+        .bind(JSON.stringify(payload), proof ? JSON.stringify(proof) : null, row.action_id)
+        .run();
+    }
+    await audit(env, run.id, "human", "mcp.tool_approved_run", {
+      server: server.name,
+      tool: row.mcp_tool,
+    });
+  } catch (err) {
+    if (row.action_id) {
+      await env.DB.prepare("UPDATE actions SET status = 'failed', payload = ? WHERE id = ?")
+        .bind(
+          JSON.stringify({
+            server: server.name,
+            tool: row.mcp_tool,
+            error: String(err).slice(0, 300),
+          }),
+          row.action_id,
+        )
+        .run();
+    }
+    await audit(env, run.id, "human", "mcp.tool_approved_failed", {
+      server: server.name,
+      tool: row.mcp_tool,
+      error: String(err).slice(0, 160),
+    });
+  }
+  return "ok";
+}
+
+/**
  * Post-hoc auto-review: runs once when a review-after session settles.
  * A result is approved on sight only when all three hold: it is in the
  * undo map, it moves no money, and it stored a revert payload. Anything
@@ -451,7 +628,7 @@ export async function autoReviewRun(
     return { auto: 0, pending: 0 };
   }
   const rows = await env.DB.prepare(
-    `SELECT id, kind, revert_payload FROM actions
+    `SELECT id, kind, payload, revert_payload FROM actions
      WHERE run_id = ? AND status = 'done'
        AND target NOT LIKE 'closeout:%'
        AND id NOT IN (SELECT action_id FROM approvals
@@ -459,12 +636,21 @@ export async function autoReviewRun(
                         AND action_id IS NOT NULL)`,
   )
     .bind(runId, runId)
-    .all<{ id: string; kind: string; revert_payload: string | null }>();
+    .all<{ id: string; kind: string; payload: string | null; revert_payload: string | null }>();
   let auto = 0;
   let pending = 0;
   for (const a of rows.results ?? []) {
+    // Read-only tool calls left no footprint outside: nothing to review.
+    let readOnlyMcp = false;
+    if (a.kind === "mcp.tool" && a.payload) {
+      try {
+        readOnlyMcp = (JSON.parse(a.payload) as { readOnly?: unknown }).readOnly === true;
+      } catch {
+        readOnlyMcp = false;
+      }
+    }
     const safe =
-      hasInverse(a.kind) && !isMoneyKind(a.kind) && !!a.revert_payload;
+      readOnlyMcp || (hasInverse(a.kind) && !isMoneyKind(a.kind) && !!a.revert_payload);
     if (safe) {
       await env.DB.prepare(
         `INSERT INTO approvals (id, org_id, run_id, goal_id, kind, action_id,

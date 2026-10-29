@@ -107,6 +107,7 @@ const ACTION_WORDS: Record<string, string> = {
   "notion.create_page": "Page",
   "notion.archive_page": "Archive page",
   "notion.run_page": "Log page",
+  "mcp.tool": "Tool use",
 };
 
 export function actionLabel(kind: string): string {

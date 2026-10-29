@@ -20,3 +20,4 @@ export * from "./words.js";
 export * from "./undo.js";
 export * from "./crew.js";
 export * from "./proof.js";
+export * from "./mcp-catalog.js";

@@ -14,11 +14,26 @@ import type { Env } from "./bindings.js";
 import {
   approveAction,
   decidePreApproval,
+  decideToolApproval,
   listApprovals,
   memberOrgs,
   memberRole,
   requestChanges,
 } from "./approvals.js";
+import {
+  MCP_CATALOG,
+  type McpAuth,
+} from "@museaiteam/shared";
+import {
+  addServer,
+  hasSecret,
+  listServers,
+  McpError,
+  removeServer,
+  setCap,
+  setSecret,
+  setTrust,
+} from "./mcp.js";
 import {
   authHandler,
   ensureOrg,
@@ -1018,6 +1033,149 @@ app.get("/api/orgs/:org/connections", async (c) => {
   return c.json({ status });
 });
 
+/** Tool servers: the registry plus the shipped catalog. Secrets never read back. */
+app.get("/api/orgs/:org/mcp", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const servers = await listServers(c.env, org);
+  const withSecrets = await Promise.all(
+    servers.map(async (s) => ({
+      id: s.id,
+      name: s.name,
+      url: s.url,
+      auth: s.auth,
+      authName: s.auth_name,
+      source: s.source,
+      status: s.status,
+      spendCapCents: s.spend_cap_cents,
+      hasSecret: s.auth === "none" ? true : await hasSecret(c.env, org, s.id),
+    })),
+  );
+  return c.json({ servers: withSecrets, catalog: MCP_CATALOG });
+});
+
+app.post(
+  "/api/orgs/:org/mcp",
+  zValidator(
+    "json",
+    z.object({
+      url: z.string().max(500).optional(),
+      catalogId: z.string().max(64).optional(),
+      name: z.string().max(80).optional(),
+      auth: z.enum(["none", "header", "query"]).optional(),
+      authName: z.string().max(64).optional(),
+      secret: z.string().max(2000).optional(),
+    }),
+  ),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const b = c.req.valid("json");
+    if (!b.url && !b.catalogId) {
+      return c.json({ error: "url or catalogId required" }, 400);
+    }
+    try {
+      const { server, tools } = await addServer(c.env, org, {
+        url: b.url,
+        catalogId: b.catalogId,
+        name: b.name,
+        auth: b.auth as McpAuth | undefined,
+        authName: b.authName,
+        secret: b.secret,
+      });
+      return c.json(
+        {
+          server: {
+            id: server.id,
+            name: server.name,
+            url: server.url,
+            auth: server.auth,
+            source: server.source,
+            status: server.status,
+            spendCapCents: server.spend_cap_cents,
+          },
+          tools: tools.map((t) => t.name),
+        },
+        201,
+      );
+    } catch (err) {
+      if (err instanceof McpError) {
+        const code = err.code === "protocol" ? 400 : 502;
+        return c.json({ error: err.message.slice(0, 200) }, code);
+      }
+      throw err;
+    }
+  },
+);
+
+app.delete("/api/orgs/:org/mcp/:id", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const gone = await removeServer(c.env, org, c.req.param("id"));
+  if (!gone) return c.json({ error: "not found" }, 404);
+  return c.json({ ok: true });
+});
+
+app.put(
+  "/api/orgs/:org/mcp/:id/secret",
+  zValidator("json", z.object({ secret: z.string().min(1).max(2000), label: z.string().max(60).optional() })),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const servers = await listServers(c.env, org);
+    if (!servers.some((s) => s.id === c.req.param("id"))) {
+      return c.json({ error: "not found" }, 404);
+    }
+    const b = c.req.valid("json");
+    await setSecret(c.env, org, c.req.param("id"), b.secret, b.label ?? "founder key");
+    return c.json({ ok: true });
+  },
+);
+
+app.put(
+  "/api/orgs/:org/mcp/:id/cap",
+  zValidator("json", z.object({ cents: z.number().int().min(0).max(100_000_00) })),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const ok = await setCap(c.env, org, c.req.param("id"), c.req.valid("json").cents);
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
+  },
+);
+
+app.post(
+  "/api/orgs/:org/mcp/:id/trust",
+  zValidator("json", z.object({ status: z.enum(["trusted", "rejected"]) })),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const ok = await setTrust(c.env, org, c.req.param("id"), c.req.valid("json").status);
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
+  },
+);
+
+app.post(
+  "/api/orgs/:org/approvals/:id/tool",
+  zValidator("json", z.object({ decision: z.enum(["approve", "reject"]) })),
+  async (c) => {
+    const org = await roleOrg(c, ...DECIDERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const gate = await trialGate(c.env, org);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+    const res = await decideToolApproval(c.env, {
+      approvalId: c.req.param("id"),
+      orgId: org,
+      userId: c.get("user").id,
+      decision: c.req.valid("json").decision,
+    });
+    if (res === "notfound") return c.json({ error: "not found" }, 404);
+    if (res === "decided") return c.json({ error: "already decided" }, 409);
+    return c.json({ ok: true });
+  },
+);
+
 app.get("/api/orgs/:org/config/:provider", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
   const provider = c.req.param("provider");
@@ -1294,7 +1452,18 @@ app.post("/api/orgs/:org/approvals/approve-all", async (c) => {
   const failed: string[] = [];
   for (const p of pend) {
     try {
-      if (p.kind === "pre") {
+      if (p.mcpServerId) {
+        // Gated tool calls execute on approve — blessing alone would
+        // strand the pending action, so they never go through approveAction.
+        const res = await decideToolApproval(c.env, {
+          approvalId: p.id,
+          orgId: org,
+          userId: user.id,
+          decision: "approve",
+        });
+        if (res === "ok") approved++;
+        else failed.push(p.id);
+      } else if (p.kind === "pre") {
         const res = await decidePreApproval(c.env, {
           runId: p.runId,
           userId: user.id,

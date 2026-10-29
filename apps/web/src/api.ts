@@ -130,6 +130,29 @@ export interface ApprovalRow {
   runGoal: string | null;
   actionKind: string | null;
   actionTarget: string | null;
+  mcpServerId: string | null;
+  mcpServerName: string | null;
+  mcpTool: string | null;
+  mcpArgs: string | null;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  url: string;
+  auth: string;
+  authName: string;
+  source: string;
+  status: string;
+  spendCapCents: number;
+  hasSecret: boolean;
+}
+
+export interface McpCatalogEntry {
+  id: string;
+  name: string;
+  url: string;
+  blurb: string;
 }
 
 export interface ActionRow {
@@ -446,4 +469,33 @@ export const api = {
   myOrgs: () =>
     req<{ orgs: Array<{ id: string; name: string; role: string }> }>(`/api/me/orgs`),
   auditCsvUrl: (org: string) => `${API_BASE}/api/orgs/${org}/audit.csv`,
+  getMcp: (org: string) =>
+    req<{ servers: McpServer[]; catalog: McpCatalogEntry[] }>(`/api/orgs/${org}/mcp`),
+  addMcp: (org: string, body: Record<string, unknown>) =>
+    req<{ server: McpServer; tools: string[] }>(`/api/orgs/${org}/mcp`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteMcp: (org: string, id: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/mcp/${id}`, { method: "DELETE" }),
+  putMcpSecret: (org: string, id: string, secret: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/mcp/${id}/secret`, {
+      method: "PUT",
+      body: JSON.stringify({ secret }),
+    }),
+  putMcpCap: (org: string, id: string, cents: number) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/mcp/${id}/cap`, {
+      method: "PUT",
+      body: JSON.stringify({ cents }),
+    }),
+  trustMcp: (org: string, id: string, status: "trusted" | "rejected") =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/mcp/${id}/trust`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    }),
+  decideTool: (org: string, id: string, decision: "approve" | "reject") =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/approvals/${id}/tool`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    }),
 };
