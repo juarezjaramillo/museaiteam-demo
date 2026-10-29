@@ -61,6 +61,7 @@ import {
 import { createRunRecord, ensureDecisionDb } from "./integrations/notion.js";
 import { commitRunMemory, recall } from "./memory.js";
 import { recallFeedback } from "./feedback.js";
+import { reportError } from "./report.js";
 import { getProviderConfig, loadToken } from "./oauth.js";
 import {
   metricLineFor,
@@ -1478,7 +1479,9 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           message: String(err),
         });
       }
-      await autoReviewRun(this.env, runId).catch(() => {});
+      await autoReviewRun(this.env, runId).catch((err) =>
+        reportError(this.env, { run: runId, kind: "auto_review", error: err }),
+      );
       await notify(this.env, run.org_id, {
         kind: "run.completed",
         title: `Done: ${run.goal.slice(0, 80)}`,

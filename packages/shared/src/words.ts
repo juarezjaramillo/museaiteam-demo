@@ -170,6 +170,7 @@ const NOTICE_WORDS: Record<string, string> = {
   "slack.command_failed": "Slack request failed",
   "digest.weekly": "Weekly retro",
   "slack.dm_fallback": "Team message",
+  "error.spike": "Something broke",
 };
 
 export function noticeLabel(kind: string): string {

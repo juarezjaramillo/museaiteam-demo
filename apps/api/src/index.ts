@@ -98,12 +98,18 @@ import {
   teamInOrg,
 } from "./teams.js";
 import { handleSlackEvent, verifySlack, type SlackEvent } from "./slack-in.js";
+import { guardTick, reportError, tickErrorWatch } from "./report.js";
 
 export { RunFeed } from "./feed.js";
 export { GoalRunWorkflow } from "./workflow.js";
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } };
 const app = new Hono<AppEnv>();
+
+app.onError(async (err, c) => {
+  await reportError(c.env, { kind: "route", error: `${c.req.method} ${c.req.path}: ${err}` });
+  return c.json({ error: "internal error" }, 500);
+});
 
 type Role = "owner" | "approver" | "viewer";
 const EVERYONE: Role[] = ["owner", "approver", "viewer"];
@@ -1527,13 +1533,14 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(sweepStuckRuns(env));
-    ctx.waitUntil(tickGoals(env));
-    ctx.waitUntil(tickStalled(env));
-    ctx.waitUntil(tickProposals(env));
-    ctx.waitUntil(promoteQueued(env));
-    ctx.waitUntil(maybePostWeeklyDigest(env));
-    ctx.waitUntil(distillLearning(env));
-    ctx.waitUntil(tickTicketThemes(env));
+    ctx.waitUntil(guardTick(env, "sweep", () => sweepStuckRuns(env)));
+    ctx.waitUntil(guardTick(env, "tickGoals", () => tickGoals(env)));
+    ctx.waitUntil(guardTick(env, "tickStalled", () => tickStalled(env)));
+    ctx.waitUntil(guardTick(env, "tickProposals", () => tickProposals(env)));
+    ctx.waitUntil(guardTick(env, "promoteQueued", () => promoteQueued(env)));
+    ctx.waitUntil(guardTick(env, "weeklyDigest", () => maybePostWeeklyDigest(env)));
+    ctx.waitUntil(guardTick(env, "distill", () => distillLearning(env)));
+    ctx.waitUntil(guardTick(env, "ticketThemes", () => tickTicketThemes(env)));
+    ctx.waitUntil(guardTick(env, "errorWatch", () => tickErrorWatch(env)));
   },
 };
