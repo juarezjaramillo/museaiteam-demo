@@ -479,6 +479,7 @@ export async function runMcpStep(
     input.history ? `\nEarlier calls and results:\n${input.history}` : "",
     "",
     "Plan the next tool calls that move the goal forward, or finish. At most 3 calls. Prefer reads over writes; writes that spend, subscribe, delete, or share need the founder's approval and pause the loop, so only ask for one when it is truly needed.",
+    "Some tools overlap the team's built-in links (GitHub, Linear, Slack, Shopify, HubSpot, Notion): leave everyday acts to those and use these tools for what they cannot do — fresh facts, searches, niche services.",
     'Reply JSON: {"done": true|false, "calls": [{"server": "<name>", "tool": "<name>", "args": {}}]}.',
   ]
     .filter(Boolean)

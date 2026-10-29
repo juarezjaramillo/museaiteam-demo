@@ -99,11 +99,18 @@ function ToolServers({ org }: { org: string }) {
               <span className="badge warn">asks on first use</span>
             )}{" "}
             {s.auth !== "none" && !s.hasSecret && (
-              <span className="badge warn">needs key</span>
+              <span className="badge warn">
+                {s.auth === "oauth" ? "needs sign-in" : "needs key"}
+              </span>
             )}
           </div>
           <div className="row">
-            {s.auth !== "none" && !s.hasSecret && (
+            {s.auth === "oauth" && !s.hasSecret && (
+              <a href={api.mcpConnectUrl(org, s.id)}>
+                <button className="sm">Connect</button>
+              </a>
+            )}
+            {(s.auth === "header" || s.auth === "query") && !s.hasSecret && (
               <span>
                 <input
                   type="password"
@@ -114,6 +121,9 @@ function ToolServers({ org }: { org: string }) {
                 <button className="sm" onClick={() => saveSecret(s.id)} disabled={!secret}>
                   Save key
                 </button>
+                <div className="dim">
+                  {catalog.find((c) => c.url === s.url)?.keyHelp || "Paste the service's API key."}
+                </div>
               </span>
             )}
             <label>

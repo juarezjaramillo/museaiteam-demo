@@ -70,8 +70,7 @@ import { getProviderConfig, loadToken } from "./oauth.js";
 import {
   callTool,
   listServers,
-  loadSecret,
-  probeServer,
+  probeServerRow,
   tagsForUrl,
   type McpServerRow,
   type McpTool,
@@ -1421,9 +1420,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     const shelf: Array<{ server: McpServerRow; tools: McpTool[] }> = [];
     for (const server of servers) {
       try {
-        const secret =
-          server.auth === "none" ? null : await loadSecret(this.env, server);
-        const probe = await probeServer(server.url, secret, server.auth, server.auth_name);
+        const probe = await probeServerRow(this.env, server);
         shelf.push({ server, tools: probe.tools });
       } catch (err) {
         await audit(this.env, runId, "workflow", "mcp.server_unreachable", {

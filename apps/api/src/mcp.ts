@@ -1,6 +1,7 @@
 import {
   MCP_CALL_TIMEOUT_MS,
   MCP_CATALOG,
+  McpError,
   catalogEntry,
   decryptFromB64,
   encryptToB64,
@@ -11,6 +12,7 @@ import {
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { audit } from "./db.js";
+import { advertisesOAuth, oauthAccess, refreshOAuth } from "./mcp-oauth.js";
 
 export interface McpServerRow {
   id: string;
@@ -28,16 +30,6 @@ export interface McpTool {
   name: string;
   description: string;
   annotations?: McpToolAnnotations;
-}
-
-export type McpErrorCode = "unreachable" | "auth" | "tool" | "timeout" | "protocol";
-
-export class McpError extends Error {
-  code: McpErrorCode;
-  constructor(code: McpErrorCode, message: string) {
-    super(message);
-    this.code = code;
-  }
 }
 
 interface JsonRpc {
@@ -161,28 +153,81 @@ export async function probeServer(
 }
 
 /**
+ * Probe a registered server row: resolves its credential and retries
+ * once after an OAuth refresh, exactly like a tool call.
+ */
+export async function probeServerRow(env: Env, server: McpServerRow): Promise<ProbeResult> {
+  try {
+    return await probeServer(
+      server.url,
+      await serverSecret(env, server),
+      server.auth === "oauth" ? "header" : server.auth,
+      server.auth === "oauth" ? "authorization" : server.auth_name,
+    );
+  } catch (err) {
+    if (server.auth === "oauth" && err instanceof McpError && err.code === "auth") {
+      await refreshOAuth(env, server);
+      return probeServer(server.url, await serverSecret(env, server), "header", "authorization");
+    }
+    throw err;
+  }
+}
+
+/**
+ * The credential for a server row: nothing, the pasted key, or a fresh
+ * OAuth token (refreshed proactively inside its last minute).
+ */
+export async function serverSecret(env: Env, server: McpServerRow): Promise<string | null> {
+  if (server.auth === "none") return null;
+  if (server.auth === "oauth") return oauthAccess(env, server);
+  return loadSecret(env, server);
+}
+
+/**
  * Call one tool. Reads come back as text; failures are typed McpErrors,
  * never throws past the loop — the caller records them as honest proof.
+ * OAuth servers get one silent refresh-and-retry on an auth failure.
  */
 export async function callTool(
   env: Env,
   server: McpServerRow,
   tool: string,
   args: Record<string, unknown>,
+  retried = false,
 ): Promise<string> {
-  const secret = server.auth === "none" ? null : await loadSecret(env, server);
-  const json = (await rpc(
-    server.url,
-    "tools/call",
-    { name: tool, arguments: args },
-    { secret, auth: server.auth, authName: server.auth_name },
-  )) as {
-    result?: {
-      content?: Array<{ type?: string; text?: string }>;
-      isError?: boolean;
-    };
-  };
-  const result = json.result;
+  const secret = await serverSecret(env, server);
+  let json: unknown;
+  try {
+    json = await rpc(
+      server.url,
+      "tools/call",
+      { name: tool, arguments: args },
+      {
+        secret,
+        auth: server.auth === "oauth" ? "header" : server.auth,
+        authName: server.auth === "oauth" ? "authorization" : server.auth_name,
+      },
+    );
+  } catch (err) {
+    if (
+      !retried &&
+      server.auth === "oauth" &&
+      err instanceof McpError &&
+      err.code === "auth"
+    ) {
+      await refreshOAuth(env, server);
+      return callTool(env, server, tool, args, true);
+    }
+    throw err;
+  }
+  const result = (
+    json as {
+      result?: {
+        content?: Array<{ type?: string; text?: string }>;
+        isError?: boolean;
+      };
+    }
+  ).result;
   if (result?.isError) {
     const msg =
       result.content?.find((c) => typeof c.text === "string")?.text ?? "tool reported an error";
@@ -238,7 +283,23 @@ export async function addServer(
   }
   const auth: McpAuth = entry?.auth ?? input.auth ?? "none";
   const authName = entry?.authName ?? input.authName ?? "";
-  const probe = await probeServer(url, input.secret ?? null, auth, authName);
+  let probe: ProbeResult;
+  try {
+    probe = await probeServer(url, input.secret ?? null, auth, authName);
+  } catch (err) {
+    // OAuth servers answer 401 until connected: an advertised OAuth
+    // handshake proves liveness, and tools arrive after Connect.
+    if (
+      (auth === "oauth" || !input.secret) &&
+      err instanceof McpError &&
+      err.code === "auth" &&
+      (await advertisesOAuth(url))
+    ) {
+      probe = { name: new URL(url).hostname, version: "", tools: [] };
+    } else {
+      throw err;
+    }
+  }
   const existing = await env.DB.prepare("SELECT id FROM mcp_servers WHERE org_id = ? AND url = ?")
     .bind(orgId, url)
     .first<{ id: string }>();
@@ -271,6 +332,9 @@ export async function addServer(
 export async function removeServer(env: Env, orgId: string, id: string): Promise<boolean> {
   await env.DB.prepare("DELETE FROM mcp_credentials WHERE org_id = ? AND server_id = ?")
     .bind(orgId, id)
+    .run();
+  await env.DB.prepare("DELETE FROM mcp_oauth_clients WHERE server_id = ?")
+    .bind(id)
     .run();
   const res = await env.DB.prepare("DELETE FROM mcp_servers WHERE org_id = ? AND id = ?")
     .bind(orgId, id)

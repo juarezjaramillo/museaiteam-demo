@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { McpError } from "@museaiteam/shared";
 import type { Env } from "../src/bindings.js";
 import {
   decideToolApproval,
@@ -8,11 +9,19 @@ import {
 import {
   addServer,
   callTool,
-  McpError,
   probeServer,
   setTrust,
   type McpServerRow,
 } from "../src/mcp.js";
+import {
+  advertisesOAuth,
+  authorizeUrl,
+  discoverOAuth,
+  finishOAuth,
+  oauthAccess,
+  prepareOAuth,
+  refreshOAuth,
+} from "../src/mcp-oauth.js";
 import { requestSignup } from "../src/proposals.js";
 import { FakeDB, blankTables, type FakeTables } from "./fake-db.js";
 
@@ -208,6 +217,109 @@ describe("requestSignup", () => {
     expect(tables.proposals_out[0].kind).toBe("signup");
     expect(await requestSignup(e, "org1", server, "401 again")).toBeNull();
     expect(tables.proposals_out).toHaveLength(1);
+  });
+});
+
+describe("mcp oauth", () => {
+  const SERVER = "https://auth.example/mcp";
+  const server = (): McpServerRow => ({
+    id: "s9", org_id: "org1", name: "O", url: SERVER,
+    auth: "oauth", auth_name: "", source: "catalog", status: "trusted", spend_cap_cents: 0,
+  });
+
+  function stubOAuthFlow() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u === "https://auth.example/.well-known/oauth-protected-resource/mcp") {
+          return Response.json({ authorization_servers: ["https://login.example"] });
+        }
+        if (u === "https://login.example/.well-known/oauth-authorization-server") {
+          return Response.json({
+            authorization_endpoint: "https://login.example/authorize",
+            token_endpoint: "https://login.example/token",
+            registration_endpoint: "https://login.example/register",
+          });
+        }
+        if (u === "https://login.example/register") {
+          return Response.json({ client_id: "cid", client_secret: "csec" });
+        }
+        if (u === "https://login.example/token") {
+          const body = new URLSearchParams(String(init?.body ?? ""));
+          if (body.get("grant_type") === "authorization_code" && !body.get("code_verifier")) {
+            return Response.json({ error: "pkce required" }, { status: 400 });
+          }
+          return Response.json({ access_token: "a1", refresh_token: "r1", expires_in: 3600 });
+        }
+        if (u === SERVER) {
+          const auth = (init?.headers as Record<string, string> | undefined)?.["authorization"];
+          if (auth === "Bearer a1") {
+            return jsonRpc({ content: [{ type: "text", text: "ok" }] });
+          }
+          return new Response("no", {
+            status: 401,
+            headers: { "www-authenticate": 'Bearer resource_metadata="https://auth.example/.well-known/oauth-protected-resource/mcp"' },
+          });
+        }
+        return new Response("404", { status: 404 });
+      }),
+    );
+  }
+
+  it("advertisesOAuth spots the handshake, rejects impostors", async () => {
+    stubOAuthFlow();
+    expect(await advertisesOAuth(SERVER)).toBe(true);
+    expect(await advertisesOAuth("https://auth.example/nope")).toBe(false);
+  });
+
+  it("discovers endpoints through resource metadata", async () => {
+    stubOAuthFlow();
+    const d = await discoverOAuth(SERVER);
+    expect(d).toEqual({
+      authorizationEndpoint: "https://login.example/authorize",
+      tokenEndpoint: "https://login.example/token",
+      registrationEndpoint: "https://login.example/register",
+    });
+  });
+
+  it("prepare → authorize url → finish stores tokens and connects", async () => {
+    stubOAuthFlow();
+    const tables = blankTables();
+    tables.mcp_servers.push({ ...server() });
+    const e = env(tables);
+    const prepared = await prepareOAuth(e, "org1", server(), "https://w.example/api/mcp/callback", "read");
+    expect(prepared.clientId).toBe("cid");
+    const url = authorizeUrl(prepared, "https://w.example/api/mcp/callback", "st", "read");
+    expect(url).toContain("code_challenge=");
+    expect(url).toContain("state=st");
+    const row = tables.mcp_oauth_clients[0];
+    expect(row.status).toBe("pending");
+    expect(typeof row.code_verifier).toBe("string");
+    await finishOAuth(e, "org1", "s9", "code1", "https://w.example/api/mcp/callback");
+    expect(tables.mcp_oauth_clients[0].status).toBe("connected");
+    expect(tables.mcp_credentials).toHaveLength(1);
+    expect(await oauthAccess(e, server())).toBe("a1");
+  });
+
+  it("refresh swaps tokens; calls retry once after refresh", async () => {
+    stubOAuthFlow();
+    const tables = blankTables();
+    tables.mcp_servers.push({ ...server() });
+    const e = env(tables);
+    await prepareOAuth(e, "org1", server(), "https://w.example/api/mcp/callback", "");
+    await finishOAuth(e, "org1", "s9", "code1", "https://w.example/api/mcp/callback");
+    expect(await refreshOAuth(e, server())).toBe("a1");
+    expect(await callTool(e, server(), "get_x", {})).toBe("ok");
+  });
+
+  it("addServer accepts oauth-advertised servers without tools", async () => {
+    stubOAuthFlow();
+    const tables = blankTables();
+    const e = env(tables);
+    const added = await addServer(e, "org1", { url: SERVER, auth: "oauth" });
+    expect(added.server.status).toBe("pending");
+    expect(added.tools).toEqual([]);
   });
 });
 

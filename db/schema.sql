@@ -406,6 +406,20 @@ CREATE TABLE IF NOT EXISTS mcp_credentials (
   server_id TEXT NOT NULL REFERENCES mcp_servers(id),
   label TEXT NOT NULL DEFAULT '',
   secret_enc TEXT NOT NULL,
+  refresh_token_enc TEXT,
+  expires_at TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(org_id, server_id)
+);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+  server_id TEXT PRIMARY KEY REFERENCES mcp_servers(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  client_id TEXT NOT NULL DEFAULT '',
+  client_secret_enc TEXT,
+  authorization_endpoint TEXT NOT NULL DEFAULT '',
+  token_endpoint TEXT NOT NULL DEFAULT '',
+  scope TEXT NOT NULL DEFAULT '',
+  code_verifier TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
 );

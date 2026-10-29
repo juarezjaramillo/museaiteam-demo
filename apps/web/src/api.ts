@@ -153,6 +153,8 @@ export interface McpCatalogEntry {
   name: string;
   url: string;
   blurb: string;
+  auth: string;
+  keyHelp: string;
 }
 
 export interface ActionRow {
@@ -498,4 +500,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ decision }),
     }),
+  mcpConnectUrl: (org: string, id: string) =>
+    `${API_BASE}/api/orgs/${org}/mcp/${id}/connect`,
 };

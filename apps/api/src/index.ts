@@ -5,6 +5,7 @@ import {
   SEAT_ROLES,
   mayDecideApproval,
   normalizeShop,
+  signState,
   trialStatus,
   validateProviderConfig,
   verifyState,
@@ -22,18 +23,20 @@ import {
 } from "./approvals.js";
 import {
   MCP_CATALOG,
+  McpError,
   type McpAuth,
 } from "@museaiteam/shared";
 import {
   addServer,
+  getServer,
   hasSecret,
   listServers,
-  McpError,
   removeServer,
   setCap,
   setSecret,
   setTrust,
 } from "./mcp.js";
+import { authorizeUrl, finishOAuth, prepareOAuth } from "./mcp-oauth.js";
 import {
   authHandler,
   ensureOrg,
@@ -1062,7 +1065,7 @@ app.post(
       url: z.string().max(500).optional(),
       catalogId: z.string().max(64).optional(),
       name: z.string().max(80).optional(),
-      auth: z.enum(["none", "header", "query"]).optional(),
+      auth: z.enum(["none", "header", "query", "oauth"]).optional(),
       authName: z.string().max(64).optional(),
       secret: z.string().max(2000).optional(),
     }),
@@ -1155,6 +1158,61 @@ app.post(
     return c.json({ ok: true });
   },
 );
+
+/**
+ * Connect a tool server with OAuth: discover, dynamically register,
+ * and bounce the founder to the server's sign-in. Generic — any
+ * server advertising OAuth works, catalog or founder-added.
+ */
+app.get("/api/orgs/:org/mcp/:id/connect", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const server = await getServer(c.env, org, c.req.param("id"));
+  if (!server) return c.json({ error: "not found" }, 404);
+  const redirectUri = `${new URL(c.req.url).origin}/api/mcp/callback`;
+  const scope = MCP_CATALOG.find((e) => e.url === server.url)?.oauthScope ?? "";
+  try {
+    const prepared = await prepareOAuth(c.env, org, server, redirectUri, scope);
+    const state = await signState(c.env.AUTH_SECRET, org, 600, server.id);
+    return c.redirect(authorizeUrl(prepared, redirectUri, state, scope), 302);
+  } catch (err) {
+    if (err instanceof McpError) {
+      return c.json({ error: err.message.slice(0, 200) }, 502);
+    }
+    throw err;
+  }
+});
+
+app.get("/api/mcp/callback", async (c) => {
+  const code = c.req.query("code") ?? "";
+  const state = c.req.query("state") ?? "";
+  const fail = (msg: string) =>
+    c.redirect(`${c.env.APP_URL}/?error=${encodeURIComponent(msg)}`, 302);
+  if (!code || !state) return fail("tool connect failed");
+  // The completer must own the org the state binds — same rule as
+  // provider connects. The state shop slot carries the server id.
+  const user = await getSessionUser(c.env, c.req.raw);
+  const { org, shop: serverId } = await verifyState(c.env.AUTH_SECRET, state).catch(() => ({
+    org: "",
+    shop: null,
+  }));
+  const role = user && org ? await memberRole(c.env, org, user.id) : null;
+  if (!user || role !== "owner" || !serverId) {
+    return fail("tool connect needs an owner session");
+  }
+  try {
+    const redirectUri = `${new URL(c.req.url).origin}/api/mcp/callback`;
+    await finishOAuth(c.env, org, serverId, code, redirectUri);
+    const server = await getServer(c.env, org, serverId);
+    await audit(c.env, null, "human", "mcp.connected", { org, server: serverId });
+    return c.redirect(
+      `${c.env.APP_URL}/?connected=mcp:${encodeURIComponent(server?.name ?? "tool")}&org=${encodeURIComponent(org)}`,
+      302,
+    );
+  } catch (err) {
+    return fail(`tool connect: ${String(err).slice(0, 120)}`);
+  }
+});
 
 app.post(
   "/api/orgs/:org/approvals/:id/tool",

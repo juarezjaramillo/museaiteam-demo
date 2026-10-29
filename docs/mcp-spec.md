@@ -36,6 +36,14 @@ Hard constraints (design around, not through):
 - Catalog in shared (`mcp-catalog.ts`): verified entries only — name,
   url, auth type, sensitive tool-name patterns on top of MCP hints
   (spend/subscription/billing/admin/share). No entry ships unverified.
+  Round 2 (all probed live): Context7, Linear, GitHub, Notion (OAuth),
+  Stripe, Shopify, Slack, Resend, PostHog, Zapier, Sentry, Supabase,
+  Atlassian (keys or open). Exa skipped (paid per call, founder call).
+- OAuth (`mcp-oauth.ts`, migration `0017`): generic DCR flow for any
+  server advertising OAuth — discover via resource metadata, register,
+  PKCE authorize, vaulted tokens with proactive + retry refresh.
+  `GET /api/orgs/:org/mcp/:id/connect` → `GET /api/mcp/callback`,
+  owner-only with signed state, same rules as provider connects.
 - Founder flow (Setup): paste URL → worker `tools/list` probe →
   show tool count + names → Save as pending. First use opens an
   approval; approve → trusted, reject → rejected (never called).
@@ -66,8 +74,11 @@ Hard constraints (design around, not through):
 
 - A tool is sensitive when the server says so (MCP `destructiveHint`
   or `openWorldHint`), the catalog tags it, or the name matches
-  spend/subscription/billing/admin/share/delete patterns. Unlisted
-  founder tools with no hints default sensitive — unknown means ask.
+  spend/subscription/billing/admin/share/delete patterns. Read-verb
+  names (`get_`, `list_`, …) sail whatever follows; unlisted founder
+  tools with no hints default sensitive — unknown means ask.
+- Overlap rule (interview-settled): built-in clients stay primary; the
+  loop prompt sends everyday acts to them and uses MCP for gaps.
 - Sensitive calls pause for approval (approvals inbox, kind `post`,
   action `mcp.tool`, plus `mcp_server_id`/`mcp_tool`/`mcp_args`
   columns). v1 executes the single gated call on approve and does NOT

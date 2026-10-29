@@ -19,6 +19,7 @@ export interface FakeTables {
   orgs: Row[];
   mcp_servers: Row[];
   mcp_credentials: Row[];
+  mcp_oauth_clients: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -35,6 +36,7 @@ export function blankTables(): FakeTables {
     orgs: [],
     mcp_servers: [],
     mcp_credentials: [],
+    mcp_oauth_clients: [],
   };
 }
 
@@ -120,6 +122,17 @@ export class FakeDB {
           if (q.startsWith("SELECT id, run_id, action_id, status, mcp_server_id, mcp_tool, mcp_args FROM approvals")) {
             const r = t.approvals.find((x) => x.id === p[0] && x.org_id === p[1] && x.mcp_server_id);
             return ((r ?? null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT * FROM mcp_oauth_clients WHERE org_id = ? AND server_id = ?")) {
+            return ((t.mcp_oauth_clients.find((r) => r.org_id === p[0] && r.server_id === p[1]) as T) ?? null);
+          }
+          if (q.startsWith("SELECT secret_enc, refresh_token_enc, expires_at FROM mcp_credentials")) {
+            const r = t.mcp_credentials.find((x) => x.org_id === p[0] && x.server_id === p[1]);
+            return ((r ? { secret_enc: r.secret_enc, refresh_token_enc: r.refresh_token_enc ?? null, expires_at: r.expires_at ?? null } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT secret_enc, refresh_token_enc FROM mcp_credentials")) {
+            const r = t.mcp_credentials.find((x) => x.org_id === p[0] && x.server_id === p[1]);
+            return ((r ? { secret_enc: r.secret_enc, refresh_token_enc: r.refresh_token_enc ?? null } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT id FROM proposals_out WHERE org_id = ? AND kind = 'signup'")) {
             const r = t.proposals_out.find(
@@ -307,11 +320,51 @@ export class FakeDB {
             return { meta: { changes: r ? 1 : 0 } };
           }
           if (q.startsWith("INSERT INTO mcp_credentials")) {
-            const [id, org_id, server_id, label, secret_enc] = p as string[];
+            // setSecret binds (id, org, server, label, enc); finishOAuth
+            // binds (id, org, server, enc, refreshEnc, expiresAt) with a
+            // literal label — same prefix, different shapes.
+            const oauth = q.includes("refresh_token_enc");
+            const [id, org_id, server_id, b3, b4, b5] = p as (string | null)[];
             t.mcp_credentials = t.mcp_credentials.filter(
               (x) => !(x.org_id === org_id && x.server_id === server_id),
             );
-            t.mcp_credentials.push({ id, org_id, server_id, label, secret_enc });
+            t.mcp_credentials.push(
+              oauth
+                ? {
+                    id, org_id, server_id, label: "oauth", secret_enc: b3,
+                    refresh_token_enc: b4 ?? null, expires_at: b5 ?? null,
+                  }
+                : {
+                    id, org_id, server_id, label: b3, secret_enc: b4,
+                    refresh_token_enc: null, expires_at: null,
+                  },
+            );
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO mcp_oauth_clients")) {
+            const [server_id, org_id, client_id, client_secret_enc, authorization_endpoint, token_endpoint, scope, code_verifier] = p as (string | null)[];
+            t.mcp_oauth_clients = t.mcp_oauth_clients.filter((x) => x.server_id !== server_id);
+            t.mcp_oauth_clients.push({
+              server_id, org_id, client_id, client_secret_enc, authorization_endpoint,
+              token_endpoint, scope, code_verifier, status: "pending",
+            });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE mcp_oauth_clients SET status = 'connected'")) {
+            const r = t.mcp_oauth_clients.find((x) => x.server_id === p[0]);
+            if (r) {
+              r.status = "connected";
+              r.code_verifier = null;
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE mcp_credentials SET secret_enc = ?, refresh_token_enc = ?")) {
+            const r = t.mcp_credentials.find((x) => x.org_id === p[3] && x.server_id === p[4]);
+            if (r) {
+              r.secret_enc = p[0];
+              r.refresh_token_enc = p[1];
+              r.expires_at = p[2];
+            }
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("UPDATE mcp_credentials SET secret_enc = ?")) {

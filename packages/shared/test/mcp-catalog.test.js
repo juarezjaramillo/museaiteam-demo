@@ -9,17 +9,27 @@ import {
 
 test("catalog entries ship verified and pre-tagged", () => {
   assert.ok(MCP_CATALOG.length >= 1);
+  const auths = new Set(["none", "header", "query", "oauth"]);
   for (const e of MCP_CATALOG) {
     assert.match(e.url, /^https:\/\//);
     assert.ok(Array.isArray(e.sensitiveTools));
+    assert.ok(auths.has(e.auth), `${e.id} auth`);
+    assert.equal(typeof e.keyHelp, "string");
+    if (e.auth === "header" || e.auth === "query") {
+      assert.ok(e.keyHelp.length > 0, `${e.id} keyHelp`);
+    }
   }
   assert.equal(catalogEntry("outagedeck")?.name, "OutageDeck");
+  assert.equal(catalogEntry("stripe")?.auth, "header");
+  assert.equal(catalogEntry("linear")?.auth, "oauth");
   assert.equal(catalogEntry("nope"), null);
 });
 
 test("reads sail through, writes ask", () => {
   assert.equal(isSensitiveToolName("get_provider_status"), false);
   assert.equal(isSensitiveToolName("list_active_incidents"), false);
+  assert.equal(isSensitiveToolName("get_post"), false);
+  assert.equal(isSensitiveToolName("posthog_query"), false);
   for (const name of [
     "delete_all",
     "remove_custom_provider",
@@ -31,6 +41,7 @@ test("reads sail through, writes ask", () => {
     "share_report",
     "send_alerts",
     "publish_post",
+    "post_message",
   ]) {
     assert.equal(isSensitiveToolName(name), true, name);
   }
