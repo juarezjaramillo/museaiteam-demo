@@ -55,6 +55,8 @@ import {
   isProvider,
   loadToken,
   setProviderConfig,
+  tokenStatus,
+  type TokenStatus,
 } from "./oauth.js";
 import { pullGoalMetric } from "./pulls.js";
 import { sweepStuckRuns } from "./sweep.js";
@@ -1009,11 +1011,11 @@ app.put(
 app.get("/api/orgs/:org/connections", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
   if (!org) return c.json({ error: "forbidden" }, 403);
-  const out: Record<string, boolean> = {};
+  const status: Record<string, TokenStatus> = {};
   for (const p of PROVIDER_IDS) {
-    out[p] = (await loadToken(c.env, org, p)) !== null;
+    status[p] = await tokenStatus(c.env, org, p);
   }
-  return c.json(out);
+  return c.json({ status });
 });
 
 app.get("/api/orgs/:org/config/:provider", async (c) => {

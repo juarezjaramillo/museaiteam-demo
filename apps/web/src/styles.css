@@ -647,6 +647,11 @@ li.read {
   color: var(--accent-deep);
 }
 
+.badge.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
 .status {
   font-size: 0.72rem;
   font-weight: 700;

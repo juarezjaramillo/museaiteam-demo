@@ -277,7 +277,9 @@ export const api = {
       body: JSON.stringify({ decision, note }),
     }),
   getConnections: (org: string) =>
-    req<Record<string, boolean>>(`/api/orgs/${org}/connections`),
+    req<{ status: Record<string, "connected" | "expired" | "missing"> }>(
+      `/api/orgs/${org}/connections`,
+    ).then((r) => r.status),
   me: () =>
     req<{ user: { id: string; email?: string }; orgId: string }>(`/api/me`),
   signInUrl: () => `${API_BASE}/api/auth/signin`,

@@ -118,7 +118,7 @@ function IdeasEditor({ org }: { org: string }) {
 
 export function Setup({ org }: { org: string }) {
   const [guards, setGuards] = useState<GuardrailRow[]>([]);
-  const [conns, setConns] = useState<Record<string, boolean>>({});
+  const [conns, setConns] = useState<Record<string, string>>({});
   const [file, setFile] = useState<File | null>(null);
   const [token, setToken] = useState("");
   const [repo, setRepo] = useState("");
@@ -218,8 +218,15 @@ export function Setup({ org }: { org: string }) {
         {LIVE_PROVIDERS.map((p) => (
           <div className="conn-row" key={p}>
             <strong>{p}</strong>
-            {conns[p] ? (
+            {conns[p] === "connected" ? (
               <span className="badge soft">connected</span>
+            ) : conns[p] === "expired" ? (
+              <span>
+                <span className="badge warn">expired</span>{" "}
+                <a href={api.connectUrl(org, p)}>
+                  <button className="sm">Reconnect</button>
+                </a>
+              </span>
             ) : p === "shopify" ? (
               <span>
                 <input
@@ -264,7 +271,7 @@ export function Setup({ org }: { org: string }) {
         </button>
         {savedParent && <span className="dim">saved: {savedParent}</span>}
       </div>
-      {conns.shopify && (
+      {conns.shopify === "connected" && (
         <p className="dim">
           Showcase product for demos/reverts:{" "}
           {products.length === 0 ? (

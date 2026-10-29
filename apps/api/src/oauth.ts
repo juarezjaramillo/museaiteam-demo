@@ -400,6 +400,31 @@ async function decryptToken(
   }
 }
 
+export type TokenStatus = "connected" | "expired" | "missing";
+
+/**
+ * Status without throwing: a dead token reports "expired", never breaks
+ * the caller. Anything unusable needs a reconnect either way.
+ */
+export async function tokenStatus(
+  env: Env,
+  orgId: string,
+  provider: Provider,
+): Promise<TokenStatus> {
+  const row = await env.DB.prepare(
+    "SELECT provider FROM oauth_tokens WHERE org_id = ? AND provider = ?",
+  )
+    .bind(orgId, provider)
+    .first<{ provider: string }>();
+  if (!row) return "missing";
+  try {
+    const token = await loadToken(env, orgId, provider);
+    return token ? "connected" : "expired";
+  } catch {
+    return "expired";
+  }
+}
+
 export async function loadToken(
   env: Env,
   orgId: string,
