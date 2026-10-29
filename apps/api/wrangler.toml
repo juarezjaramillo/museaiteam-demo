@@ -1,0 +1,52 @@
+name = "museaiteam-api"
+main = "src/index.ts"
+compatibility_date = "2024-10-01"
+
+[vars]
+APP_URL = "https://museaiteam-api.juarezjaramillo.workers.dev"
+SPARK_MODE = "live"
+MAIL_FROM = "MuseAITeam Demo <onboarding@resend.dev>"
+DEMO_GITHUB_REPO = "juarezjaramillo/museaiteam-demo"
+DEMO_LINEAR_TEAM = "Muse AI Team Demo"
+DEMO_SLACK_CHANNEL = "ai-team"
+
+# Same-origin: the worker serves the dashboard SPA itself, so auth cookies
+# are first-party and post-login redirects land on a real page.
+[assets]
+directory = "../web/dist"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "museaiteam"
+database_id = "5202d49b-afaf-44d5-a297-5fce03ff1b08"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "museaiteam-artifacts"
+
+[[vectorize]]
+binding = "ORG_MEMORY"
+index_name = "org-memory"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "FEED"
+class_name = "RunFeed"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RunFeed"]
+
+[[workflows]]
+name = "goal-run"
+binding = "GOAL_RUN"
+class_name = "GoalRunWorkflow"
+
+# Secrets via `wrangler secret put`: AUTH_SECRET, TOKEN_ENC_KEY,
+# META_MODEL_API_KEY, AI_GATEWAY_ACCOUNT, AI_GATEWAY_ID,
+# GITHUB_CLIENT_ID/SECRET, LINEAR_CLIENT_ID/SECRET, SLACK_CLIENT_ID/SECRET

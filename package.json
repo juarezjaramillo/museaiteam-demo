@@ -1,0 +1,17 @@
+{
+  "name": "museaiteam",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "test": "node --test packages/shared/test/*.test.js",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "db:apply:local": "wrangler d1 execute museaiteam --local --file=db/schema.sql"
+  }
+}

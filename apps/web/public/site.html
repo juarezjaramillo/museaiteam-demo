@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#141a2e">
+<title>Muse AI Team — AI employees that deliver real work</title>
+<meta name="description" content="Give your business a goal. A team of AI employees organizes itself, does the work across your tools, and reports back. First goal free.">
+<link rel="icon" type="image/svg+xml" href="/brand/svg/muse-ai-team-mark.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --font-display: "Sora", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ink: #1a2333; --dim: #5b6478; --faint: #8b93a9; --line: #e3e8f2;
+  --bg: #f5f6fb; --accent: #1f5eff; --accent-deep: #1443c4; --accent-soft: #e9efff;
+  --violet: #7c5cff; --good: #157a3d; --good-bg: #e2f3e7;
+  --radius: 16px; --side-bg: #141a2e;
+  --shadow: 0 1px 2px rgba(26,35,51,.06), 0 16px 40px -20px rgba(26,35,51,.28);
+}
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+h1, h2, h3 { font-family: var(--font-display); letter-spacing: -.02em; line-height: 1.2; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 0 1.25rem; }
+.dim { color: var(--dim); }
+
+/* ---------- Header ---------- */
+.top { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,.88); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.top-in { max-width: 880px; margin: 0 auto; padding: .7rem 1.25rem; display: flex; align-items: center; gap: .7rem; }
+.top-in img { width: 34px; height: 34px; }
+.top-in strong { font-family: var(--font-display); font-size: 1rem; }
+.top-in a.cta { margin-left: auto; }
+
+/* ---------- Buttons ---------- */
+.btn { display: inline-block; font: inherit; font-weight: 700; font-size: .95rem; padding: .7rem 1.4rem; border-radius: 12px; border: 0; background: linear-gradient(135deg, #1f5eff, #7c5cff); color: #fff; text-decoration: none; cursor: pointer; box-shadow: 0 10px 24px -10px rgba(31,94,255,.7); }
+.btn:hover { filter: brightness(1.07); }
+.btn.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(26,35,51,.08); }
+.btn.sm { font-size: .85rem; padding: .5rem 1rem; border-radius: 10px; }
+
+/* ---------- Hero ---------- */
+.hero { position: relative; overflow: hidden; background:
+  radial-gradient(600px 300px at 85% -60px, rgba(124,92,255,.16), transparent 70%),
+  radial-gradient(700px 340px at 8% 0, rgba(31,94,255,.14), transparent 70%),
+  #fff; }
+.hero-in { max-width: 880px; margin: 0 auto; padding: 4rem 1.25rem 3rem; }
+.eyebrow { display: inline-block; font-size: .75rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-deep); background: var(--accent-soft); border: 1px solid #c9d8fd; border-radius: 999px; padding: .3rem .85rem; margin-bottom: 1.1rem; }
+h1 { font-size: clamp(2.1rem, 5.5vw, 3.2rem); font-weight: 800; margin: 0 0 1rem; max-width: 16em; }
+h1 .grad { background: linear-gradient(120deg, #1f5eff, #7c5cff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lede { font-size: 1.12rem; color: var(--dim); max-width: 34em; margin: 0 0 1.4rem; }
+.cta-row { display: flex; gap: .7rem; flex-wrap: wrap; align-items: center; }
+.guarantee { margin-top: 1.4rem; background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 12px; padding: .85rem 1.1rem; box-shadow: var(--shadow); max-width: 34em; }
+.works { margin-top: 1.6rem; font-size: .82rem; color: var(--faint); font-weight: 600; }
+.works span { display: inline-block; background: var(--bg); border: 1px solid var(--line); color: var(--dim); border-radius: 999px; padding: .2rem .7rem; margin: .15rem .15rem 0 0; font-weight: 600; }
+
+/* ---------- Sections ---------- */
+section.block { padding: 3rem 0 0; }
+section.block h2 { font-size: 1.6rem; margin: 0 0 .4rem; }
+section.block > .wrap > p.standfirst { color: var(--dim); margin: 0 0 1.2rem; max-width: 36em; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.25rem; box-shadow: 0 1px 2px rgba(26,35,51,.07); }
+.grid { display: grid; gap: .9rem; }
+@media (min-width: 640px) { .grid.two { grid-template-columns: 1fr 1fr; } .grid.three { grid-template-columns: 1fr 1fr 1fr; } }
+
+/* ---------- Sandbox console ---------- */
+.console { background: var(--side-bg); color: #e6ebfa; border-radius: 20px; padding: 1.4rem; box-shadow: var(--shadow); }
+.console h3 { color: #fff; margin: 1.1rem 0 .5rem; font-size: .95rem; }
+.preset-row { display: grid; gap: .6rem; }
+@media (min-width: 640px) { .preset-row { grid-template-columns: 1fr 1fr 1fr; } }
+button.preset { font: inherit; text-align: left; padding: .8rem .9rem; border-radius: 12px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.05); color: #fff; cursor: pointer; }
+button.preset:hover:not(:disabled) { border-color: var(--violet); background: rgba(124,92,255,.16); }
+button.preset:disabled { opacity: .45; cursor: default; }
+button.preset strong { display: block; font-family: var(--font-display); font-size: .9rem; }
+button.preset span { font-size: .78rem; color: #9aa5c4; }
+#sandbox-out { margin-top: 1rem; font-size: .88rem; min-height: 3rem; }
+#sandbox-out .status { display: inline-block; font-size: .72rem; font-weight: 800; padding: .2rem .7rem; border-radius: 999px; background: rgba(124,92,255,.25); color: #cdbfff; border: 1px solid rgba(124,92,255,.5); }
+#sandbox-out .prop { border-left: 3px solid var(--violet); padding: .15rem 0 .15rem .75rem; margin: .65rem 0; }
+#sandbox-out .role { font-size: .7rem; font-weight: 800; padding: .12rem .5rem; border-radius: 999px; background: rgba(255,255,255,.12); color: #fff; }
+#sandbox-out .dim { color: #9aa5c4; }
+#sandbox-out ul.tight { padding-left: 1.1rem; margin: .4rem 0; }
+#sandbox-out ul.tight li { margin: .3rem 0; }
+#sandbox-out .btn { margin-top: .8rem; }
+
+/* ---------- Replays ---------- */
+.replay { overflow: hidden; }
+.replay-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.pill { font-size: .72rem; font-weight: 800; padding: .22rem .7rem; border-radius: 999px; background: var(--good-bg); color: var(--good); }
+.replay-head strong { font-family: var(--font-display); font-size: .95rem; }
+.delta { margin-left: auto; font-family: var(--font-display); font-weight: 800; font-size: 1.25rem; background: linear-gradient(120deg, #1f5eff, #7c5cff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+pre.transcript { white-space: pre-wrap; font-size: .82rem; line-height: 1.55; background: var(--bg); border: 1px solid var(--line); padding: .8rem .9rem; border-radius: 12px; margin: 0; color: var(--ink); }
+
+/* ---------- How it works ---------- */
+.step { position: relative; padding-top: 1rem; }
+.step-num { font-family: var(--font-display); font-weight: 800; font-size: .75rem; color: #fff; background: linear-gradient(135deg, #1f5eff, #7c5cff); border-radius: 999px; width: 1.6rem; height: 1.6rem; display: inline-flex; align-items: center; justify-content: center; margin-bottom: .5rem; }
+.step strong { display: block; font-family: var(--font-display); font-size: .92rem; margin-bottom: .2rem; }
+.step p { margin: 0; font-size: .87rem; color: var(--dim); }
+
+/* ---------- Pricing ---------- */
+.price-card { text-align: left; }
+.price { font-family: var(--font-display); font-weight: 800; font-size: 2rem; }
+.price small { font-size: .9rem; color: var(--dim); font-weight: 600; }
+table.stack { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 1rem; font-size: .88rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: 0 1px 2px rgba(26,35,51,.07); }
+.stack th, .stack td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); }
+.stack tr:last-child td { border-bottom: 0; }
+.stack th { background: var(--bg); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+.stack td:last-child, .stack th:last-child { color: var(--dim); }
+.stack td:nth-child(2) { font-weight: 700; }
+.yes { color: var(--good); font-weight: 800; } .no { color: var(--faint); }
+
+/* ---------- FAQ / final ---------- */
+details { margin-top: .6rem; border: 1px solid var(--line); border-radius: 12px; padding: .8rem 1.05rem; background: #fff; }
+summary { cursor: pointer; font-weight: 700; font-family: var(--font-display); font-size: .93rem; }
+details p { color: var(--dim); font-size: .9rem; margin-bottom: 0; }
+.final { background: linear-gradient(135deg, #141a2e, #232a4d); border-radius: 24px; color: #fff; text-align: center; padding: 3rem 1.5rem; margin-top: 3rem; box-shadow: var(--shadow); }
+.final h2 { font-size: 1.8rem; margin: 0 0 .5rem; color: #fff; }
+.final p { color: #aab4d4; margin: 0 0 1.2rem; }
+footer { margin: 2.5rem 0 0; border-top: 1px solid var(--line); padding: 1.2rem 0 2.5rem; font-size: .85rem; }
+</style>
+</head>
+<body>
+
+<header class="top"><div class="top-in">
+<img src="/brand/svg/muse-ai-team-mark.svg" alt="Muse AI Team mark">
+<strong>Muse AI Team</strong>
+<a class="btn sm cta" href="/">Start free</a>
+</div></header>
+
+<div class="hero"><div class="hero-in">
+<span class="eyebrow">AI employees for your business</span>
+<h1>Give your business a goal. <span class="grad">Wake up to finished work.</span></h1>
+<p class="lede">A manager, an engineer, a marketer, a PM, and an analyst. They organize around your goal, do the work inside your real tools, and report back with results you can check, approve, or undo.</p>
+<div class="cta-row">
+<a class="btn" href="/">Start your first goal</a>
+<a class="btn ghost" href="#sandbox">Watch a sample session</a>
+</div>
+<div class="guarantee"><strong>First goal free.</strong> <span class="dim">Full session — organizing, work, results — free for 14 days. Keep everything even if you cancel. Cancel anytime.</span></div>
+<p class="works">Works with <span>GitHub</span><span>Linear</span><span>Slack</span><span>Shopify</span><span>HubSpot</span><span>Notion</span></p>
+</div></div>
+
+<main>
+<section class="block" id="sandbox"><div class="wrap">
+<h2>Try a sample session — no signup</h2>
+<p class="standfirst">The real team, running live on a sample goal. It suggests, agrees on a plan, and lists everything it <em>would</em> make. Sample sessions can't touch outside tools.</p>
+<div class="console">
+<div class="preset-row">
+<button class="preset" data-preset="saas"><strong>Software</strong><span>Lift trial activation 32% → 37%</span></button>
+<button class="preset" data-preset="ecom"><strong>E-commerce</strong><span>Recover 12% of abandoned carts</span></button>
+<button class="preset" data-preset="smb"><strong>Local services</strong><span>Win back 20 quiet customers</span></button>
+</div>
+<div id="sandbox-out"><p class="dim">Pick a goal above. A full sample takes about a minute.</p></div>
+</div>
+</div></section>
+
+<section class="block"><div class="wrap">
+<h2>What a week looks like</h2>
+<p class="standfirst">Sample outputs from real sessions. Every behavior below is live in the product.</p>
+<div class="grid">
+<div class="card replay">
+<div class="replay-head"><span class="pill">Software</span><strong>Trial activation</strong><span class="delta">32% → 37%</span></div>
+<pre class="transcript">Mon — Goal set: lift trial-to-paid activation in 14 days.
+Tue — Session 1 delivers: onboarding checklist PR (merged), Linear epic,
+  Slack announcement, Notion decision page.
+Mon — Check fetches the number: 34.1%. On track.
+Tue — Session 2 delivers: email variant + in-app nudge.
+Thu — Check: 37.2%. Goal done. 2 sessions, 11 results, 0 meetings.</pre>
+</div>
+<div class="card replay">
+<div class="replay-head"><span class="pill">E-commerce</span><strong>Cart recovery</strong><span class="delta">+12%</span></div>
+<pre class="transcript">Mon — Goal set: recover 12% of abandoned carts, discounts ≤ 15%.
+Tue — Session 1 delivers: 10% targeted discount, cart-email copy,
+  sort of 8 "where's my order" tickets.
+Fri — Check pulls Shopify: recovery 9.4% → 11.1%.
+Mon — Session 2 delivers: second wave on the winning segment.
+Wed — Check: 12.6%. Done. A limit blocked one 20% discount
+  the marketer proposed — it never left the building.</pre>
+</div>
+<div class="card replay">
+<div class="replay-head"><span class="pill">Local services</span><strong>Win-back</strong><span class="delta">22 back</span></div>
+<pre class="transcript">Mon — Goal set: win back 20 quiet customers in 10 days.
+Tue — Session 1 delivers: HubSpot sort of 34 stale tickets,
+  personal follow-up drafts queued for approval.
+Fri — You approve 18, request changes on 2. A revision
+  rewrites them overnight and re-submits.
+Wed — Check: 22 back. Goal done. Every message approved first.</pre>
+</div>
+</div>
+</div></section>
+
+<section class="block"><div class="wrap">
+<h2>How it works</h2>
+<p class="standfirst">You assign outcomes. The team handles everything else.</p>
+<div class="grid two">
+<div class="card step"><span class="step-num">1</span><strong>Set a goal</strong><p>A number, a target, a deadline. The team assembles itself and works in weekly sessions.</p></div>
+<div class="card step"><span class="step-num">2</span><strong>The team organizes, then delivers</strong><p>Each hire suggests, everyone weighs in, the manager breaks ties. Work lands as PRs, issues, messages, discounts, tickets, pages.</p></div>
+<div class="card step"><span class="step-num">3</span><strong>You approve what matters</strong><p>Review after is the default; check first holds every result until you say go. Request changes and a revision re-does it.</p></div>
+<div class="card step"><span class="step-num">4</span><strong>Limits on every worker</strong><p>Each hire touches only the tools and changes you allow, inside a spend cap. Rule-breakers are stopped before anything goes out.</p></div>
+<div class="card step"><span class="step-num">5</span><strong>Stop button + full undo</strong><p>Stop any session instantly; one click undoes everything it made, newest first.</p></div>
+<div class="card step"><span class="step-num">6</span><strong>They learn like hires</strong><p>Rate any result up or down; the team turns what worked into lessons you approve — and follows it next session.</p></div>
+</div>
+</div></section>
+
+<section class="block"><div class="wrap">
+<h2>One AI hire vs one human hire</h2>
+<p class="standfirst">Five workers cost less than half of one junior hire — and your first goal is free.</p>
+<div class="card price-card"><span class="price">$499<small> / worker / month</small></span></div>
+<table class="stack">
+<tr><th></th><th>Muse AI Team</th><th>One human hire</th></tr>
+<tr><td>Cost</td><td>$499 / worker / mo</td><td>$6,000–$12,000 / mo</td></tr>
+<tr><td>Nights &amp; weekends</td><td><span class="yes">✓</span></td><td><span class="no">—</span></td></tr>
+<tr><td>Delivers in 6 tools at once</td><td><span class="yes">✓</span></td><td><span class="no">—</span></td></tr>
+<tr><td>Everything undoable</td><td><span class="yes">✓</span></td><td><span class="no">—</span></td></tr>
+<tr><td>Shows its thinking first</td><td><span class="yes">✓</span></td><td><span class="no">Sometimes</span></td></tr>
+</table>
+<div class="cta-row" style="margin-top:1.2rem"><a class="btn" href="/">Start your first goal</a></div>
+</div></section>
+
+<section class="block"><div class="wrap">
+<h2>Questions</h2>
+<details><summary>What can it actually touch?</summary>
+<p>GitHub (PRs, code), Linear (issues, sub-tasks), Slack (messages, threads), Shopify (discounts, product copy), HubSpot (tickets, sorting), Notion (decision pages, work log). Each connection takes only the access it needs.</p></details>
+<details><summary>What stops it from doing something stupid?</summary>
+<p>Three layers: limits block off-limits work before it goes out; check-first mode holds every result for your decision; the stop button ends a session instantly and undo reverses what it made.</p></details>
+<details><summary>How do I know it's working toward my number?</summary>
+<p>Every goal has a number. The team fetches it from your tools (or you type it in). See it charted on the goal page, with a full timeline of sessions, check-ins, approvals, and results.</p></details>
+<details><summary>What happens when I cancel?</summary>
+<p>Everything done stays done — PRs, issues, pages, copy are yours. The team just stops running. Download your history as a spreadsheet first for your records.</p></details>
+</div></section>
+
+<div class="wrap"><div class="final">
+<h2>Your first goal is free.</h2>
+<p>Connect one tool, set one goal, watch the team organize and deliver.</p>
+<a class="btn" href="/">Start now</a>
+</div></div>
+</main>
+
+<footer><div class="wrap dim">Muse AI Team · Built for the Meta Global AI Developer Hackathon</div></footer>
+
+<script>
+(function () {
+  var out = document.getElementById("sandbox-out");
+  var buttons = Array.prototype.slice.call(document.querySelectorAll("button.preset"));
+  var timer = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  var STATUS_WORDS = { debating: "organizing", acting: "working" };
+
+  function render(d) {
+    var status = STATUS_WORDS[d.run.status] || d.run.status;
+    var h = '<p><span class="status">' + esc(status) + "</span> ";
+    h += '<span class="dim">' + esc(d.run.goal) + "</span></p>";
+    if (d.proposals.length) {
+      h += "<h3>Suggestions</h3>";
+      d.proposals.forEach(function (p) {
+        h += '<div class="prop"><span class="role">' + esc(p.agent_role) + "</span> <strong>" +
+          esc(p.title) + "</strong><br><span class='dim'>" + esc(p.body).slice(0, 400) + "</span></div>";
+      });
+    }
+    if (d.votes.length) {
+      var fors = d.votes.filter(function (v) { return v.choice === "for"; }).length;
+      h += "<p><strong>Agreement:</strong> " + fors + " agree / " + (d.votes.length - fors) + " other (" + d.votes.length + " total)</p>";
+    }
+    if (d.ruling) {
+      h += "<h3>Decision (" + esc(d.ruling.decided_by) + ")</h3><p><strong>" +
+        esc(d.ruling.decision) + "</strong><br><span class='dim'>" + esc(d.ruling.rationale).slice(0, 400) + "</span></p>";
+    }
+    if (d.actions.length) {
+      h += "<h3>What it would do</h3><ul class='tight'>";
+      d.actions.forEach(function (a) {
+        h += "<li><span class='dim'>" + esc(a.kind) + "</span> — " + esc(a.target) + "</li>";
+      });
+      h += "</ul>";
+      h += "<p><a class='btn sm' href='/'>Connect your tools to make this for real</a></p>";
+    }
+    out.innerHTML = h;
+  }
+
+  function poll(id) {
+    fetch("/api/sandbox/runs/" + id)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        render(d);
+        if (["done", "failed", "halted"].indexOf(d.run.status) === -1) {
+          timer = setTimeout(function () { poll(id); }, 3000);
+        } else {
+          buttons.forEach(function (b) { b.disabled = false; });
+        }
+      })
+      .catch(function (e) {
+        out.innerHTML = "<p>Sample hiccup: " + esc(e.message) + ". Try again.</p>";
+        buttons.forEach(function (b) { b.disabled = false; });
+      });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (timer) clearTimeout(timer);
+      buttons.forEach(function (x) { x.disabled = true; });
+      out.innerHTML = "<p><span class='status'>starting</span> <span class='dim'>The team is reading the goal…</span></p>";
+      fetch("/api/sandbox/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ preset: b.getAttribute("data-preset") }),
+      })
+        .then(function (r) {
+          if (r.status === 429) throw new Error("daily sample limit reached — come back tomorrow, or sign in for the real thing.");
+          if (!r.ok) throw new Error("could not start (" + r.status + ")");
+          return r.json();
+        })
+        .then(function (d) { poll(d.runId); })
+        .catch(function (e) {
+          out.innerHTML = "<p>" + esc(e.message) + "</p>";
+          buttons.forEach(function (b2) { b2.disabled = false; });
+        });
+    });
+  });
+})();
+</script>
+</body>
+</html>

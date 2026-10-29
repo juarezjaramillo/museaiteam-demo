@@ -1,0 +1,3 @@
+ALTER TABLE sessions ADD COLUMN id TEXT;
+ALTER TABLE accounts ADD COLUMN oauth_token_secret TEXT DEFAULT NULL;
+ALTER TABLE accounts ADD COLUMN oauth_token TEXT DEFAULT NULL;

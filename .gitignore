@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env*.local
+*.tsbuildinfo
+.DS_Store
+coverage/

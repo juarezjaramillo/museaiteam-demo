@@ -1,0 +1,35 @@
+export interface Env {
+  DB: D1Database;
+  ARTIFACTS: R2Bucket;
+  ORG_MEMORY: VectorizeIndex;
+  AI: Ai;
+  FEED: DurableObjectNamespace;
+  GOAL_RUN: Workflow;
+  APP_URL: string;
+  AUTH_SECRET: string;
+  TOKEN_ENC_KEY: string;
+  META_MODEL_API_KEY: string;
+  SPARK_MODE?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  RESEND_API_KEY?: string;
+  MAIL_FROM: string;
+  GITHUB_CLIENT_ID: string;
+  GITHUB_CLIENT_SECRET: string;
+  LINEAR_CLIENT_ID: string;
+  LINEAR_CLIENT_SECRET: string;
+  SLACK_CLIENT_ID: string;
+  SLACK_CLIENT_SECRET: string;
+  SLACK_SIGNING_SECRET?: string;
+  SHOPIFY_CLIENT_ID?: string;
+  SHOPIFY_CLIENT_SECRET?: string;
+  HUBSPOT_CLIENT_ID?: string;
+  HUBSPOT_CLIENT_SECRET?: string;
+  NOTION_CLIENT_ID?: string;
+  NOTION_CLIENT_SECRET?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  DEMO_GITHUB_REPO: string;
+  DEMO_LINEAR_TEAM: string;
+  DEMO_SLACK_CHANNEL: string;
+}
