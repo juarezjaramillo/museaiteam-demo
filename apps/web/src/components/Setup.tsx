@@ -385,6 +385,20 @@ export function Setup({ org }: { org: string }) {
 
       <h2>Ideas</h2>
       <IdeasEditor org={org} />
+
+      <h2>Help</h2>
+      <p className="dim">
+        Stuck? Write to{" "}
+        <a href="mailto:support@fernwaylabs.com">support@fernwaylabs.com</a>{" "}
+        — a human replies within a day. System health:{" "}
+        <a
+          href="https://museaiteam-api.juarezjaramillo.workers.dev/status"
+          target="_blank"
+          rel="noreferrer"
+        >
+          status
+        </a>.
+      </p>
       </section>
     </div>
   );

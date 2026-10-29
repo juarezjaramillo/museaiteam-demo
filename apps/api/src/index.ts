@@ -170,6 +170,54 @@ app.use("/api/*", async (c, next) => {
 
 app.get("/api/health", (c) => c.json({ ok: true }));
 
+/** Public status: dependency checks + recent incident kinds. No org data. */
+app.get("/api/status", async (c) => {
+  const checks: Record<string, boolean> = { worker: true, d1: false };
+  try {
+    await c.env.DB.prepare("SELECT 1").first();
+    checks.d1 = true;
+  } catch {
+    /* stays false */
+  }
+  let live = 0;
+  try {
+    const row = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM runs WHERE status NOT IN ('done', 'failed', 'halted')",
+    ).first<{ n: number }>();
+    live = row?.n ?? 0;
+  } catch {
+    /* stays 0 */
+  }
+  let incidents: Array<{ event: string; at: string }> = [];
+  try {
+    const rows = await c.env.DB.prepare(
+      `SELECT event, created_at AS at FROM audit_log
+       WHERE event = 'run.failed' OR event LIKE 'error.%'
+       ORDER BY rowid DESC LIMIT 5`,
+    ).all<{ event: string; at: string }>();
+    incidents = rows.results ?? [];
+  } catch {
+    /* stays empty */
+  }
+  const ok = checks.d1;
+  return c.json({ ok, checks, liveRuns: live, incidents }, ok ? 200 : 503);
+});
+
+const STATUS_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Team status</title>
+<style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
+.ok{color:#1a7f37}.bad{color:#b42318}.dim{color:#666}li{margin:.25rem 0}</style>
+</head><body><h1>AI Team status</h1><p id="s">Checking…</p>
+<ul id="i"></ul><p class="dim">Need help? <a href="mailto:support@fernwaylabs.com">support@fernwaylabs.com</a></p>
+<script>fetch("/api/status").then(r=>r.json()).then(j=>{
+document.getElementById("s").innerHTML=j.ok?'<span class="ok">● All systems go</span>':'<span class="bad">● Trouble — we are on it</span>';
+document.getElementById("i").innerHTML=(j.incidents||[]).map(n=>"<li>"+n.event+" — "+n.at+"</li>").join("")||"<li>No recent incidents.</li>";
+}).catch(()=>{document.getElementById("s").textContent="Could not reach the API.";});</script>
+</body></html>`;
+
+app.get("/status", (c) => c.html(STATUS_PAGE));
+
 // Approval decisions intentionally live above the requireSession gate
 // so unauthenticated and viewer-role deciders both 403. (Missing runs
 // still 404, like every other route.) Do not move these below.
