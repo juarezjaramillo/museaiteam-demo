@@ -1,0 +1,304 @@
+import {
+  KEYSTONE_SEAT,
+  SEAT_MAP_DEFAULT,
+  decryptFromB64,
+  encryptToB64,
+  isSeatMapRole,
+  keyFromHex,
+  paidTools,
+} from "@museaiteam/shared";
+import type { Env } from "./bindings.js";
+import { audit } from "./db.js";
+import { notify } from "./notify.js";
+import { getSeat } from "./seat-mail.js";
+
+export type ProvisionStrategy = "api" | "browser" | "manual";
+
+/**
+ * How a tool gets provisioned. Only GitHub has a real invite API
+ * today; everything else queues for the box browser (phase 4) with a
+ * manual task as the last resort. No fictional APIs.
+ */
+export function strategyFor(tool: string): ProvisionStrategy {
+  if (tool === "github") return "api";
+  return "browser";
+}
+
+export async function seatMapFor(
+  env: Env,
+  orgId: string,
+  role: string,
+): Promise<{ tools: string[]; overridden: boolean }> {
+  const fallback = (SEAT_MAP_DEFAULT as Record<string, string[]>)[role] ?? [];
+  const row = await env.DB.prepare(
+    "SELECT tools_json FROM org_seat_map WHERE org_id = ? AND role = ?",
+  )
+    .bind(orgId, role)
+    .first<{ tools_json: string }>();
+  if (!row) return { tools: fallback, overridden: false };
+  try {
+    const tools = JSON.parse(row.tools_json) as unknown;
+    if (Array.isArray(tools)) {
+      return { tools: tools.filter((t): t is string => typeof t === "string"), overridden: true };
+    }
+  } catch {
+    /* fall through to default */
+  }
+  return { tools: fallback, overridden: false };
+}
+
+export async function setSeatMap(
+  env: Env,
+  orgId: string,
+  role: string,
+  tools: string[],
+): Promise<void> {
+  if (!isSeatMapRole(role)) throw new Error(`unknown role ${role}`);
+  await env.DB.prepare(
+    `INSERT INTO org_seat_map (org_id, role, tools_json) VALUES (?, ?, ?)
+     ON CONFLICT(org_id, role) DO UPDATE SET tools_json = excluded.tools_json`,
+  )
+    .bind(orgId, role, JSON.stringify(tools.slice(0, 20)))
+    .run();
+  await audit(env, null, "human", "seatmap.updated", { org: orgId, role });
+}
+
+export interface SeatRequest {
+  id: string;
+  seat_id: string;
+  tools: string[];
+  status: string;
+  created_at: string;
+}
+
+/**
+ * Compute a hire's asks: map tools + extras, minus tools already
+ * verified. One open request per seat — repeats return the open one.
+ */
+export async function requestSeats(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  extras: string[] = [],
+): Promise<SeatRequest> {
+  const seat = await getSeat(env, orgId, seatId);
+  if (!seat) throw new Error("seat not found");
+  const open = await env.DB.prepare(
+    "SELECT id, tools_json, status, created_at FROM seat_requests WHERE seat_id = ? AND status = 'proposed' LIMIT 1",
+  )
+    .bind(seatId)
+    .first<{ id: string; tools_json: string; status: string; created_at: string }>();
+  if (open) {
+    return { id: open.id, seat_id: seatId, tools: JSON.parse(open.tools_json) as string[], status: open.status, created_at: open.created_at };
+  }
+  const { tools } = await seatMapFor(env, orgId, seat.role);
+  const verified = await env.DB.prepare(
+    "SELECT tool FROM seat_provisions WHERE seat_id = ? AND status = 'verified'",
+  )
+    .bind(seatId)
+    .all<{ tool: string }>();
+  const have = new Set((verified.results ?? []).map((r) => r.tool));
+  const asks = [...new Set([...tools, ...extras])].filter((t) => !have.has(t)).slice(0, 20);
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    "INSERT INTO seat_requests (id, org_id, seat_id, tools_json, status) VALUES (?, ?, ?, ?, 'proposed')",
+  )
+    .bind(id, orgId, seatId, JSON.stringify(asks))
+    .run();
+  const paid = paidTools(asks);
+  await notify(env, orgId, {
+    kind: "seat.requested",
+    title: `Seats for ${seat.role}: ${asks.length} tools`.slice(0, 120),
+    body: paid.length > 0 ? `Includes paid seats: ${paid.join(", ")}. Approve all at once.` : "All free tools. Approve all at once.",
+  });
+  await audit(env, null, "system", "seat.requested", { org: orgId, seat: seatId, tools: asks.length });
+  return { id, seat_id: seatId, tools: asks, status: "proposed", created_at: "" };
+}
+
+export async function decideSeatRequest(
+  env: Env,
+  orgId: string,
+  requestId: string,
+  userId: string,
+  approve: boolean,
+): Promise<"ok" | "notfound" | "decided"> {
+  const row = await env.DB.prepare(
+    "SELECT id, seat_id, tools_json, status FROM seat_requests WHERE id = ? AND org_id = ?",
+  )
+    .bind(requestId, orgId)
+    .first<{ id: string; seat_id: string; tools_json: string; status: string }>();
+  if (!row) return "notfound";
+  if (row.status !== "proposed") return "decided";
+  const status = approve ? "approved" : "denied";
+  const claimed = await env.DB.prepare(
+    "UPDATE seat_requests SET status = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ? AND status = 'proposed'",
+  )
+    .bind(status, userId, row.id)
+    .run();
+  if ((claimed.meta.changes ?? 0) !== 1) return "decided";
+  await audit(env, null, "human", "seat.request_decided", { org: orgId, id: row.id, status });
+  if (approve) {
+    const tools = JSON.parse(row.tools_json) as string[];
+    for (const tool of tools) {
+      await env.DB.prepare(
+        `INSERT INTO seat_provisions (seat_id, tool, step, status) VALUES (?, ?, 'invite', 'pending')
+         ON CONFLICT(seat_id, tool) DO UPDATE SET step = 'invite', status = 'pending', detail = '', updated_at = datetime('now')`,
+      )
+        .bind(row.seat_id, tool)
+        .run();
+    }
+  }
+  return "ok";
+}
+
+export async function keystoneVerified(env: Env, seatId: string, role: string): Promise<boolean> {
+  const keystone = (KEYSTONE_SEAT as Record<string, string>)[role];
+  if (!keystone) return true;
+  const row = await env.DB.prepare(
+    "SELECT tool FROM seat_provisions WHERE seat_id = ? AND tool = ? AND status = 'verified' LIMIT 1",
+  )
+    .bind(seatId, keystone)
+    .first<{ tool: string }>();
+  return !!row;
+}
+
+// --- admin grants ---
+
+export async function saveAdminGrant(
+  env: Env,
+  orgId: string,
+  tool: string,
+  scopes: string[],
+  secret: string,
+): Promise<void> {
+  const key = keyFromHex(env.TOKEN_ENC_KEY);
+  await env.DB.prepare(
+    `INSERT INTO tool_admin_grants (org_id, tool, scopes_json, secret_enc, status, updated_at)
+     VALUES (?, ?, ?, ?, 'granted', datetime('now'))
+     ON CONFLICT(org_id, tool) DO UPDATE SET
+       scopes_json = excluded.scopes_json, secret_enc = excluded.secret_enc,
+       status = 'granted', updated_at = datetime('now')`,
+  )
+    .bind(orgId, tool, JSON.stringify(scopes), await encryptToB64(key, secret))
+    .run();
+  await audit(env, null, "human", "grant.saved", { org: orgId, tool });
+}
+
+async function loadAdminGrant(env: Env, orgId: string, tool: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT secret_enc FROM tool_admin_grants WHERE org_id = ? AND tool = ? AND status = 'granted'",
+  )
+    .bind(orgId, tool)
+    .first<{ secret_enc: string }>();
+  if (!row?.secret_enc) return null;
+  try {
+    return await decryptFromB64(keyFromHex(env.TOKEN_ENC_KEY), row.secret_enc);
+  } catch {
+    return null;
+  }
+}
+
+// --- provisioning tick ---
+
+interface ProvisionRow {
+  seat_id: string;
+  tool: string;
+  step: string;
+  status: string;
+}
+
+async function setProvision(
+  env: Env,
+  seatId: string,
+  tool: string,
+  step: string,
+  status: string,
+  detail: string,
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE seat_provisions SET step = ?, status = ?, detail = ?, updated_at = datetime('now') WHERE seat_id = ? AND tool = ?",
+  )
+    .bind(step, status, detail.slice(0, 300), seatId, tool)
+    .run();
+}
+
+/**
+ * GitHub org invite via API. Needs the hire's GitHub username — which
+ * only exists after the hire creates its account (box browser). Until
+ * then the step waits honestly instead of failing.
+ */
+async function provisionGithub(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  email: string | null,
+): Promise<void> {
+  const grant = await loadAdminGrant(env, orgId, "github");
+  if (!grant) {
+    await setProvision(env, seatId, "github", "invite", "waiting", "needs the GitHub admin grant in Setup");
+    return;
+  }
+  // GitHub invites by username, not email: without the hire's username
+  // (minted at account creation) there is nothing to call yet.
+  await setProvision(env, seatId, "github", "invite", "waiting", "waiting on the hire's GitHub username");
+}
+
+/**
+ * Advance every pending provision one step. API tools act; browser
+ * tools park with an honest reason until phase 4 runs them.
+ */
+export async function tickProvisions(env: Env): Promise<number> {
+  const rows = await env.DB.prepare(
+    `SELECT p.seat_id, p.tool, p.step, p.status, t.org_id, s.email, s.role
+     FROM seat_provisions p
+     JOIN seats s ON s.id = p.seat_id
+     JOIN teams t ON t.id = s.team_id
+     WHERE p.status IN ('pending', 'waiting') LIMIT 50`,
+  )
+    .bind()
+    .all<ProvisionRow & { org_id: string; email: string | null; role: string }>();
+  let acted = 0;
+  for (const r of rows.results ?? []) {
+    try {
+      const strategy = strategyFor(r.tool);
+      if (strategy === "api" && r.status === "pending") {
+        if (r.tool === "github") {
+          await provisionGithub(env, r.org_id, r.seat_id, r.email);
+          acted++;
+        }
+      } else if (strategy === "browser" && r.status === "pending") {
+        await setProvision(env, r.seat_id, r.tool, "invite", "waiting", "queued for the hire's browser");
+        acted++;
+      }
+    } catch (err) {
+      await setProvision(env, r.seat_id, r.tool, r.step, "failed", String(err)).catch(() => {});
+    }
+  }
+  return acted;
+}
+
+/**
+ * Verify a seat tool with a read call as the hire, then mark verified.
+ * Only token-backed tools verify today; the rest verify at first box use.
+ */
+export async function verifySeatTool(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  tool: string,
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT kind, status FROM seat_credentials WHERE org_id = ? AND seat_id = ? AND tool = ?",
+  )
+    .bind(orgId, seatId, tool)
+    .first<{ kind: string; status: string }>();
+  if (!row || row.kind !== "token" || row.status !== "ok") return false;
+  await env.DB.prepare(
+    `INSERT INTO seat_provisions (seat_id, tool, step, status) VALUES (?, ?, 'verify', 'verified')
+     ON CONFLICT(seat_id, tool) DO UPDATE SET step = 'verify', status = 'verified', updated_at = datetime('now')`,
+  )
+    .bind(seatId, tool)
+    .run();
+  await audit(env, null, "system", "seat.verified", { org: orgId, seat: seatId, tool });
+  return true;
+}

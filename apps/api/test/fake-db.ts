@@ -25,6 +25,10 @@ export interface FakeTables {
   seat_mail: Row[];
   seat_credentials: Row[];
   seat_tools: Row[];
+  org_seat_map: Row[];
+  seat_requests: Row[];
+  seat_provisions: Row[];
+  tool_admin_grants: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -47,6 +51,10 @@ export function blankTables(): FakeTables {
     seat_mail: [],
     seat_credentials: [],
     seat_tools: [],
+    org_seat_map: [],
+    seat_requests: [],
+    seat_provisions: [],
+    tool_admin_grants: [],
   };
 }
 
@@ -173,6 +181,30 @@ export class FakeDB {
             );
             return ((r ? { secret_enc: r.secret_enc, kind: r.kind, status: r.status } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT tools_json FROM org_seat_map WHERE org_id = ? AND role = ?")) {
+            const r = t.org_seat_map.find((x) => x.org_id === p[0] && x.role === p[1]);
+            return ((r ? { tools_json: r.tools_json } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id, tools_json, status, created_at FROM seat_requests WHERE seat_id = ?")) {
+            const r = t.seat_requests.find((x) => x.seat_id === p[0] && x.status === "proposed");
+            return ((r ?? null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id, seat_id, tools_json, status FROM seat_requests WHERE id = ? AND org_id = ?")) {
+            const r = t.seat_requests.find((x) => x.id === p[0] && x.org_id === p[1]);
+            return ((r ?? null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT tool FROM seat_provisions WHERE seat_id = ? AND tool = ? AND status = 'verified'")) {
+            const r = t.seat_provisions.find((x) => x.seat_id === p[0] && x.tool === p[1] && x.status === "verified");
+            return ((r ? { tool: r.tool } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT secret_enc FROM tool_admin_grants WHERE org_id = ? AND tool = ?")) {
+            const r = t.tool_admin_grants.find((x) => x.org_id === p[0] && x.tool === p[1] && x.status === "granted");
+            return ((r ? { secret_enc: r.secret_enc } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT kind, status FROM seat_credentials WHERE org_id = ? AND seat_id = ? AND tool = ?")) {
+            const r = t.seat_credentials.find((x) => x.org_id === p[0] && x.seat_id === p[1] && x.tool === p[2]);
+            return ((r ? { kind: r.kind, status: r.status } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT id FROM seat_mail WHERE seat_id = ? AND message_id = ?")) {
             const r = t.seat_mail.find((x) => x.seat_id === p[0] && x.message_id === p[1]);
             return ((r ? { id: r.id } : null) as T) ?? null;
@@ -193,6 +225,20 @@ export class FakeDB {
                 .slice(-20)
                 .map((r) => ({ lineup: r.lineup })) as T[],
             };
+          }
+          if (q.startsWith("SELECT tool FROM seat_provisions WHERE seat_id = ? AND status = 'verified'")) {
+            return { results: t.seat_provisions.filter((r) => r.seat_id === p[0] && r.status === "verified").map((r) => ({ tool: r.tool })) as T[] };
+          }
+          if (q.startsWith("SELECT p.seat_id, p.tool, p.step, p.status, t.org_id, s.email, s.role FROM seat_provisions p")) {
+            const out: Row[] = [];
+            for (const pr of t.seat_provisions) {
+              if (pr.status !== "pending" && pr.status !== "waiting") continue;
+              const s = t.seats.find((x) => x.id === pr.seat_id);
+              const team = s ? t.teams.find((x) => x.id === s.team_id) : null;
+              if (!s || !team) continue;
+              out.push({ seat_id: pr.seat_id, tool: pr.tool, step: pr.step, status: pr.status, org_id: team.org_id, email: s.email ?? null, role: s.role });
+            }
+            return { results: out.slice(0, 50) as T[] };
           }
           if (q.startsWith("SELECT mcp_server_id FROM seat_tools WHERE seat_id = ?")) {
             return { results: t.seat_tools.filter((r) => r.seat_id === p[0]) as T[] };
@@ -475,6 +521,53 @@ export class FakeDB {
             if (!t.seat_tools.some((x) => x.seat_id === p[0] && x.mcp_server_id === p[1])) {
               t.seat_tools.push({ seat_id: p[0], mcp_server_id: p[1] });
             }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO org_seat_map")) {
+            t.org_seat_map = t.org_seat_map.filter((x) => !(x.org_id === p[0] && x.role === p[1]));
+            t.org_seat_map.push({ org_id: p[0], role: p[1], tools_json: p[2] });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO seat_requests")) {
+            const [id, org_id, seat_id, tools_json] = p as string[];
+            t.seat_requests.push({ id, org_id, seat_id, tools_json, status: "proposed", created_at: "" });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seat_requests SET status = ?")) {
+            const r = t.seat_requests.find((x) => x.id === p[2] && x.status === "proposed");
+            if (r) {
+              r.status = p[0];
+              r.decided_by = p[1];
+              return { meta: { changes: 1 } };
+            }
+            return { meta: { changes: 0 } };
+          }
+          if (q.startsWith("INSERT INTO seat_provisions")) {
+            const [seat_id, tool] = p as string[];
+            const r = t.seat_provisions.find((x) => x.seat_id === seat_id && x.tool === tool);
+            const step = q.includes("'verify'") ? "verify" : "invite";
+            const status = q.includes("'verified'") ? "verified" : "pending";
+            if (r) {
+              r.step = step;
+              r.status = status;
+              r.detail = "";
+            } else {
+              t.seat_provisions.push({ seat_id, tool, step, status, detail: "" });
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seat_provisions SET step = ?")) {
+            const r = t.seat_provisions.find((x) => x.seat_id === p[3] && x.tool === p[4]);
+            if (r) {
+              r.step = p[0];
+              r.status = p[1];
+              r.detail = p[2];
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO tool_admin_grants")) {
+            t.tool_admin_grants = t.tool_admin_grants.filter((x) => !(x.org_id === p[0] && x.tool === p[1]));
+            t.tool_admin_grants.push({ org_id: p[0], tool: p[1], scopes_json: p[2], secret_enc: p[3], status: "granted" });
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO seat_mail")) {

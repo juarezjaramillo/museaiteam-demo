@@ -22,8 +22,12 @@ import {
   requestChanges,
 } from "./approvals.js";
 import {
+  KEYSTONE_SEAT,
   MCP_CATALOG,
   McpError,
+  SEAT_MAP_ROLES,
+  SEAT_PRICES,
+  paidTools,
   type McpAuth,
 } from "@museaiteam/shared";
 import {
@@ -47,6 +51,13 @@ import {
 import { runBaseline } from "./baseline.js";
 import { audit, getRun } from "./db.js";
 import { listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
+import {
+  decideSeatRequest,
+  requestSeats,
+  setSeatMap,
+  seatMapFor,
+  tickProvisions,
+} from "./provision.js";
 import {
   bindSeatTool,
   deleteSeatCredential,
@@ -1239,6 +1250,110 @@ app.get("/api/orgs/:org/seats/:id/mail", async (c) => {
   return c.json({ mail });
 });
 
+app.get("/api/orgs/:org/seat-map", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const roles = SEAT_MAP_ROLES;
+  const out: Record<string, { tools: string[]; overridden: boolean }> = {};
+  for (const role of roles) {
+    out[role] = await seatMapFor(c.env, org, role);
+  }
+  return c.json({ map: out, keystones: KEYSTONE_SEAT, prices: SEAT_PRICES });
+});
+
+app.put(
+  "/api/orgs/:org/seat-map",
+  zValidator("json", z.object({ role: z.string().max(32), tools: z.array(z.string().max(120)).max(20) })),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const b = c.req.valid("json");
+    try {
+      await setSeatMap(c.env, org, b.role, b.tools);
+    } catch (err) {
+      return c.json({ error: String(err).slice(0, 120) }, 400);
+    }
+    return c.json({ ok: true });
+  },
+);
+
+app.post(
+  "/api/orgs/:org/seats/:id/requests",
+  zValidator("json", z.object({ extras: z.array(z.string().max(120)).max(20).optional() })),
+  async (c) => {
+    const org = await roleOrg(c, ...DECIDERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    try {
+      const req = await requestSeats(c.env, org, c.req.param("id"), c.req.valid("json").extras ?? []);
+      return c.json({ request: req }, 201);
+    } catch (err) {
+      return c.json({ error: String(err).slice(0, 120) }, 404);
+    }
+  },
+);
+
+app.get("/api/orgs/:org/seat-requests", async (c) => {
+  const org = await roleOrg(c, ...DECIDERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const rows = await c.env.DB.prepare(
+    `SELECT r.id, r.seat_id, s.role, s.email, r.tools_json, r.status, r.created_at
+     FROM seat_requests r JOIN seats s ON s.id = r.seat_id
+     JOIN teams t ON t.id = s.team_id WHERE t.org_id = ? ORDER BY r.created_at DESC LIMIT 100`,
+  )
+    .bind(org)
+    .all<{ id: string; seat_id: string; role: string; email: string | null; tools_json: string; status: string; created_at: string }>();
+  return c.json({
+    requests: (rows.results ?? []).map((r) => ({
+      id: r.id,
+      seatId: r.seat_id,
+      role: r.role,
+      email: r.email,
+      tools: JSON.parse(r.tools_json) as string[],
+      paid: paidTools(JSON.parse(r.tools_json) as string[]),
+      status: r.status,
+      createdAt: r.created_at,
+    })),
+  });
+});
+
+app.post(
+  "/api/orgs/:org/seat-requests/:id/decide",
+  zValidator("json", z.object({ approve: z.boolean() })),
+  async (c) => {
+    const org = await roleOrg(c, ...DECIDERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    if (c.req.valid("json").approve) {
+      const gate = await trialGate(c.env, org);
+      if (!gate.status.subscribed) {
+        const row = await c.env.DB.prepare(
+          "SELECT tools_json FROM seat_requests WHERE id = ? AND org_id = ?",
+        )
+          .bind(c.req.param("id"), org)
+          .first<{ tools_json: string }>();
+        const paid = row ? paidTools(JSON.parse(row.tools_json) as string[]) : [];
+        if (paid.length > 0) {
+          return c.json({ error: `trial covers free tools only — paid seats wait: ${paid.join(", ")}` }, 403);
+        }
+      }
+    }
+    const res = await decideSeatRequest(c.env, org, c.req.param("id"), c.get("user").id, c.req.valid("json").approve);
+    if (res === "notfound") return c.json({ error: "not found" }, 404);
+    if (res === "decided") return c.json({ error: "already decided" }, 409);
+    return c.json({ ok: true });
+  },
+);
+
+app.get("/api/orgs/:org/seats/:id/provisions", async (c) => {
+  const org = await roleOrg(c, ...DECIDERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const rows = await c.env.DB.prepare(
+    "SELECT tool, step, status, detail, updated_at FROM seat_provisions WHERE seat_id = ? ORDER BY tool",
+  )
+    .bind(c.req.param("id"))
+    .all<{ tool: string; step: string; status: string; detail: string; updated_at: string }>();
+  return c.json({ provisions: rows.results ?? [] });
+});
+
 app.get("/api/orgs/:org/seats/:id/credentials", async (c) => {
   const org = await roleOrg(c, ...DECIDERS);
   if (!org) return c.json({ error: "forbidden" }, 403);
@@ -1997,5 +2112,6 @@ export default {
     ctx.waitUntil(guardTick(env, "distill", () => distillLearning(env)));
     ctx.waitUntil(guardTick(env, "ticketThemes", () => tickTicketThemes(env)));
     ctx.waitUntil(guardTick(env, "errorWatch", () => tickErrorWatch(env)));
+    ctx.waitUntil(guardTick(env, "provisions", () => tickProvisions(env)));
   },
 };

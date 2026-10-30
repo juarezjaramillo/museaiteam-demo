@@ -178,6 +178,9 @@ const NOTICE_WORDS: Record<string, string> = {
   "metric.gap": "Metric needs numbers",
   "review.reverted": "Result reverted",
   "mail.received": "Hire mail",
+  "seat.requested": "Seat request",
+  "seat.verified": "Seat ready",
+  "seat.lost": "Seat lost",
   "billing.past_due": "Payment failed",
   "billing.canceling": "Subscription ending",
 };
