@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { LIVE_PROVIDERS, SEAT_ROLES } from "@museaiteam/shared";
 import { api, type GuardrailRow, type McpCatalogEntry, type McpServer, type TeamRow } from "../api.js";
+import { GoButton } from "./GoButton.js";
 
 function GuardEditor({
   org,
@@ -278,9 +279,7 @@ function ToolsStep({
           ) : conns[p] === "expired" ? (
             <span>
               <span className="badge warn">expired</span>{" "}
-              <a href={api.connectUrl(org, p)}>
-                <button className="sm">Reconnect</button>
-              </a>
+              <GoButton href={api.connectUrl(org, p)} className="sm">Reconnect</GoButton>
             </span>
           ) : p === "shopify" ? (
             <span>
@@ -290,23 +289,22 @@ function ToolsStep({
                 onChange={(e) => setShop(e.target.value)}
               />{" "}
               {shop.trim() ? (
-                <a
+                <GoButton
                   href={api.connectUrl(
                     org,
                     p,
                     `&shop=${encodeURIComponent(shop.trim())}`,
                   )}
+                  className="sm"
                 >
-                  <button className="sm">Connect</button>
-                </a>
+                  Connect
+                </GoButton>
               ) : (
                 <button className="sm" disabled>Connect</button>
               )}
             </span>
           ) : (
-            <a href={api.connectUrl(org, p)}>
-              <button className="sm">Connect</button>
-            </a>
+            <GoButton href={api.connectUrl(org, p)} className="sm">Connect</GoButton>
           )}
         </div>
       ))}
@@ -330,9 +328,7 @@ function ToolsStep({
           </div>
           <div className="row">
             {s.auth === "oauth" && !s.hasSecret && (
-              <a href={api.mcpConnectUrl(org, s.id)}>
-                <button className="sm">Connect</button>
-              </a>
+              <GoButton href={api.mcpConnectUrl(org, s.id)} className="sm">Connect</GoButton>
             )}
             {(s.auth === "header" || s.auth === "query") && !s.hasSecret && (
               <span>

@@ -7,6 +7,7 @@ import {
   type VerticalId,
 } from "@museaiteam/shared";
 import { api } from "../api.js";
+import { GoButton } from "./GoButton.js";
 
 type Step = "signup" | "goal" | "team";
 const STEPS: Step[] = ["signup", "goal", "team"];
@@ -114,9 +115,7 @@ export function Wizard({
             </p>
           ) : (
             <div className="row">
-              <a href={api.signInUrl()}>
-                <button className="primary sm">Sign in</button>
-              </a>
+              <GoButton href={api.signInUrl()} className="primary sm">Sign in</GoButton>
               <span className="dim">You return here after signing in.</span>
               <button className="sm" onClick={() => go("goal")}>Skip for now</button>
             </div>
@@ -186,9 +185,7 @@ export function Wizard({
                 <button className="sm" onClick={onDone}>Close and edit first</button>
               </>
             ) : (
-              <a href={api.signInUrl()}>
-                <button className="primary sm">Sign in to start</button>
-              </a>
+              <GoButton href={api.signInUrl()} className="primary sm">Sign in to start</GoButton>
             )}
           </div>
         </div>
