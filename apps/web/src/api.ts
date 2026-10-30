@@ -14,6 +14,7 @@ export interface RunRow {
 export interface SeatRow {
   id: string;
   role: string;
+  email: string | null;
   hired: number;
   approved: number;
 }

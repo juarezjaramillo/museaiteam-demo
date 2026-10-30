@@ -120,11 +120,27 @@ CREATE TABLE IF NOT EXISTS seats (
   id TEXT PRIMARY KEY,
   team_id TEXT NOT NULL REFERENCES teams(id),
   role TEXT NOT NULL,
+  email TEXT,
   hired INTEGER NOT NULL DEFAULT 0,
   approved INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (team_id, role)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seats_email ON seats(email);
+
+CREATE TABLE IF NOT EXISTS seat_mail (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  seat_id TEXT NOT NULL REFERENCES seats(id),
+  message_id TEXT NOT NULL DEFAULT '',
+  from_addr TEXT NOT NULL DEFAULT '',
+  to_addr TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  read_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_seat_mail_seat ON seat_mail(seat_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_seats_team ON seats(team_id);
 
 CREATE TABLE IF NOT EXISTS goals (

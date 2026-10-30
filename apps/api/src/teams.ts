@@ -2,6 +2,7 @@ import {
   CLASSIC_ROLES,
   MAX_TEAM_SEATS,
   isSeatRole,
+  seatEmail,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { audit } from "./db.js";
@@ -9,6 +10,7 @@ import { audit } from "./db.js";
 export interface Seat {
   id: string;
   role: string;
+  email: string | null;
   hired: number;
   approved: number;
 }
@@ -28,7 +30,7 @@ export async function listTeams(env: Env, orgId: string): Promise<Team[]> {
   const out: Team[] = [];
   for (const t of teams.results ?? []) {
     const seats = await env.DB.prepare(
-      "SELECT id, role, hired, approved FROM seats WHERE team_id = ? ORDER BY rowid",
+      "SELECT id, role, email, hired, approved FROM seats WHERE team_id = ? ORDER BY rowid",
     )
       .bind(t.id)
       .all<Seat>();
@@ -145,9 +147,9 @@ export async function hireSeat(
   if (dup) throw new DuplicateSeat(`${role} already sits on this team`);
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    "INSERT INTO seats (id, team_id, role, hired, approved) VALUES (?, ?, ?, 1, 0)",
+    "INSERT INTO seats (id, team_id, role, email, hired, approved) VALUES (?, ?, ?, ?, 1, 0)",
   )
-    .bind(id, target, role)
+    .bind(id, target, role, seatEmail(role, id))
     .run();
   await audit(env, null, "human", "seat.hired", { org: orgId, team: target, role, overflow });
   return { id, teamId: target, overflow };

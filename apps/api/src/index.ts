@@ -46,6 +46,7 @@ import {
 } from "./auth.js";
 import { runBaseline } from "./baseline.js";
 import { audit, getRun } from "./db.js";
+import { listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
 import { ingestGitHub, ingestUpload } from "./ingest.js";
 import { listProducts } from "./integrations/shopify.js";
 import {
@@ -1223,6 +1224,21 @@ app.get("/api/mcp/callback", async (c) => {
   }
 });
 
+app.get("/api/orgs/:org/seats/:id/mail", async (c) => {
+  const org = await roleOrg(c, ...DECIDERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const mail = await listSeatMail(c.env, org, c.req.param("id"), c.req.query("unread") === "1");
+  return c.json({ mail });
+});
+
+app.post("/api/orgs/:org/seats/:id/mail/:mailId/read", async (c) => {
+  const org = await roleOrg(c, ...DECIDERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const ok = await markMailRead(c.env, org, c.req.param("id"), c.req.param("mailId"));
+  if (!ok) return c.json({ error: "not found" }, 404);
+  return c.json({ ok: true });
+});
+
 app.post(
   "/api/orgs/:org/approvals/:id/tool",
   zValidator("json", z.object({ decision: z.enum(["approve", "reject"]) })),
@@ -1862,6 +1878,35 @@ app.all("/api/auth/*", async (c) => {
 
 export default {
   fetch: app.fetch,
+  async email(
+    message: {
+      from: string;
+      to: string[];
+      cc?: string[];
+      headers: Headers;
+      raw: ReadableStream;
+    },
+    env: Env,
+  ): Promise<void> {
+    // Hire inboxes: route by To address, store raw (capped) for the
+    // hire loop to parse. Needs hires.museaiteam.com MX → this worker.
+    try {
+      const buf = await new Response(message.raw).arrayBuffer().catch(() => null);
+      const raw = buf ? new TextDecoder().decode(buf).slice(0, 20000) : "";
+      await receiveSeatMail(env, {
+        to: message.to ?? [],
+        cc: message.cc ?? [],
+        from: String(message.from ?? "").slice(0, 200),
+        subject: message.headers.get("subject") ?? "(no subject)",
+        body: raw,
+        messageId: message.headers.get("message-id") ?? undefined,
+      });
+    } catch (err) {
+      await audit(env, null, "system", "mail.receive_failed", {
+        error: String(err).slice(0, 160),
+      });
+    }
+  },
   async scheduled(
     _event: ScheduledEvent,
     env: Env,

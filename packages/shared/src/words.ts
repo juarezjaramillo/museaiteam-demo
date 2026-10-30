@@ -177,6 +177,7 @@ const NOTICE_WORDS: Record<string, string> = {
   "trigger.fired": "Metric moved",
   "metric.gap": "Metric needs numbers",
   "review.reverted": "Result reverted",
+  "mail.received": "Hire mail",
   "billing.past_due": "Payment failed",
   "billing.canceling": "Subscription ending",
 };

@@ -20,6 +20,9 @@ export interface FakeTables {
   mcp_servers: Row[];
   mcp_credentials: Row[];
   mcp_oauth_clients: Row[];
+  teams: Row[];
+  seats: Row[];
+  seat_mail: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -37,6 +40,9 @@ export function blankTables(): FakeTables {
     mcp_servers: [],
     mcp_credentials: [],
     mcp_oauth_clients: [],
+    teams: [],
+    seats: [],
+    seat_mail: [],
   };
 }
 
@@ -139,6 +145,20 @@ export class FakeDB {
             const r = t.mcp_credentials.find((x) => x.org_id === p[0] && x.server_id === p[1]);
             return ((r ? { secret_enc: r.secret_enc, refresh_token_enc: r.refresh_token_enc ?? null } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT s.id, s.team_id, s.role, s.email, s.hired, s.approved FROM seats s")) {
+            const s = t.seats.find((x) => x.id === p[0]);
+            const team = s ? t.teams.find((x) => x.id === s.team_id && x.org_id === p[1]) : null;
+            return ((s && team ? s : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT s.id, t.org_id FROM seats s JOIN teams t")) {
+            const s = t.seats.find((x) => x.email === p[0]);
+            const team = s ? t.teams.find((x) => x.id === s.team_id) : null;
+            return ((s && team ? { id: s.id, org_id: team.org_id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id FROM seat_mail WHERE seat_id = ? AND message_id = ?")) {
+            const r = t.seat_mail.find((x) => x.seat_id === p[0] && x.message_id === p[1]);
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT id FROM proposals_out WHERE org_id = ? AND kind = 'signup'")) {
             const r = t.proposals_out.find(
               (x) => x.org_id === p[0] && x.kind === "signup" && x.title === p[1] && (x.status === "proposed" || x.status === "reminded"),
@@ -154,6 +174,15 @@ export class FakeDB {
                 .filter((r) => r.goal_id === p[0] && r.status === "done")
                 .slice(-20)
                 .map((r) => ({ lineup: r.lineup })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT id, from_addr, subject, substr(body, 1, 2000) AS body, read_at, created_at FROM seat_mail")) {
+            const unreadOnly = q.includes("AND read_at IS NULL");
+            return {
+              results: t.seat_mail
+                .filter((r) => r.seat_id === p[0] && (!unreadOnly || !r.read_at))
+                .slice(-50)
+                .reverse() as T[],
             };
           }
           if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ?")) {
@@ -384,6 +413,16 @@ export class FakeDB {
             const r = t.mcp_credentials.find((x) => x.org_id === p[1] && x.server_id === p[2]);
             if (r) r.secret_enc = p[0];
             return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO seat_mail")) {
+            const [id, org_id, seat_id, message_id, from_addr, to_addr, subject, body] = p as string[];
+            t.seat_mail.push({ id, org_id, seat_id, message_id, from_addr, to_addr, subject, body, read_at: null });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seat_mail SET read_at = datetime('now')")) {
+            const r = t.seat_mail.find((x) => x.id === p[0] && x.seat_id === p[1] && !x.read_at);
+            if (r) r.read_at = "now";
+            return { meta: { changes: r ? 1 : 0 } };
           }
           if (q.startsWith("INSERT INTO proposals_out (id, org_id, kind, goal_id, title, body, status, remind_at, start_at)")) {
             t.proposals_out.push({
