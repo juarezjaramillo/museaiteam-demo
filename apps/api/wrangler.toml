@@ -1,6 +1,6 @@
 name = "museaiteam-api"
 main = "src/index.ts"
-compatibility_date = "2024-10-01"
+compatibility_date = "2025-09-01"
 
 [vars]
 APP_URL = "https://museaiteam-api.juarezjaramillo.workers.dev"
@@ -42,6 +42,10 @@ class_name = "RunFeed"
 name = "RATE_LIMIT"
 class_name = "RateLimit"
 
+[[durable_objects.bindings]]
+name = "HIRE_BOX"
+class_name = "HireBox"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RunFeed"]
@@ -49,6 +53,20 @@ new_sqlite_classes = ["RunFeed"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["RateLimit"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["HireBox"]
+
+# One container per hire box, managed by the HireBox durable object
+# (seat id = box id). Built from the repo Dockerfile at deploy time.
+[[containers]]
+name = "hire-box"
+class_name = "HireBox"
+image = "../../containers/box/Dockerfile"
+image_build_context = "../../containers/box"
+instance_type = "basic"
+max_instances = 20
 
 [[workflows]]
 name = "goal-run"

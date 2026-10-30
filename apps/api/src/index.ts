@@ -49,6 +49,7 @@ import {
   type SessionUser,
 } from "./auth.js";
 import { runBaseline } from "./baseline.js";
+import { BoxOffline, BoxQuota, boxSpend, provider, reconcileBoxes } from "./box.js";
 import { audit, getRun } from "./db.js";
 import { listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
 import {
@@ -144,6 +145,7 @@ import { clientIp, takeHit } from "./ratelimit.js";
 
 export { RunFeed } from "./feed.js";
 export { RateLimit } from "./ratelimit.js";
+export { HireBox } from "./hire-box.js";
 export { GoalRunWorkflow } from "./workflow.js";
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } };
@@ -1000,7 +1002,7 @@ app.get("/api/orgs/:org", async (c) => {
   if (!org) return c.json({ error: "forbidden" }, 403);
   const row = await c.env.DB.prepare(
     `SELECT id, name, trial_started_at, trial_ends_at, grace_used, subscribed,
-       idea_allowance_words, proposal_grace_hours
+       idea_allowance_words, proposal_grace_hours, box_max_concurrent
      FROM orgs WHERE id = ?`,
   )
     .bind(org)
@@ -1013,6 +1015,7 @@ app.get("/api/orgs/:org", async (c) => {
       subscribed: number;
       idea_allowance_words: number;
       proposal_grace_hours: number;
+      box_max_concurrent: number;
     }>();
   if (!row) return c.json({ error: "not found" }, 404);
   // Pure read: only run/baseline attempts may grant grace, never a banner fetch.
@@ -1024,6 +1027,7 @@ app.get("/api/orgs/:org", async (c) => {
       ...(await ideaBudget(c.env, org)),
       graceHours: row.proposal_grace_hours,
     },
+    boxMaxConcurrent: row.box_max_concurrent,
   });
 });
 
@@ -1034,6 +1038,7 @@ app.put(
     z.object({
       idea_allowance_words: z.number().int().min(0).max(10000000).optional(),
       proposal_grace_hours: z.number().int().min(24).max(168).optional(),
+      box_max_concurrent: z.number().int().min(1).max(10).optional(),
     }),
   ),
   async (c) => {
@@ -1048,6 +1053,11 @@ app.put(
     if (b.proposal_grace_hours !== undefined) {
       await c.env.DB.prepare("UPDATE orgs SET proposal_grace_hours = ? WHERE id = ?")
         .bind(b.proposal_grace_hours, org)
+        .run();
+    }
+    if (b.box_max_concurrent !== undefined) {
+      await c.env.DB.prepare("UPDATE orgs SET box_max_concurrent = ? WHERE id = ?")
+        .bind(b.box_max_concurrent, org)
         .run();
     }
     await audit(c.env, null, "human", "org.settings_updated", { org });
@@ -1097,6 +1107,10 @@ app.post(
       auth: z.enum(["none", "header", "query", "oauth"]).optional(),
       authName: z.string().max(64).optional(),
       secret: z.string().max(2000).optional(),
+      boxArgv: z.object({
+        bin: z.enum(["node", "python3", "npx"]),
+        args: z.array(z.string().max(500)).max(20),
+      }).optional(),
     }),
   ),
   async (c) => {
@@ -1114,6 +1128,7 @@ app.post(
         auth: b.auth as McpAuth | undefined,
         authName: b.authName,
         secret: b.secret,
+        boxArgv: b.boxArgv,
       });
       return c.json(
         {
@@ -1342,6 +1357,42 @@ app.post(
     return c.json({ ok: true });
   },
 );
+
+app.get("/api/orgs/:org/seats/:id/box", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const seatId = c.req.param("id");
+  const box = provider();
+  const state = await box.state(c.env, seatId);
+  const spend = await boxSpend(c.env, org, Date.now() - 30 * 86_400_000);
+  return c.json({ state, spend: spend.find((s) => s.seatId === seatId) ?? null });
+});
+
+app.post("/api/orgs/:org/seats/:id/box/wake", async (c) => {
+  const org = await roleOrg(c, ...DECIDERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  try {
+    await provider().wake(c.env, org, c.req.param("id"), `founder:${c.get("user").id}`);
+  } catch (err) {
+    if (err instanceof BoxOffline) return c.json({ error: "hire boxes are not connected yet" }, 503);
+    if (err instanceof BoxQuota) return c.json({ error: err.message }, 429);
+    throw err;
+  }
+  return c.json({ ok: true });
+});
+
+app.post("/api/orgs/:org/seats/:id/box/destroy", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  await provider().destroy(c.env, org, c.req.param("id"));
+  return c.json({ ok: true });
+});
+
+app.get("/api/orgs/:org/box/spend", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  return c.json({ spend: await boxSpend(c.env, org, Date.now() - 30 * 86_400_000) });
+});
 
 app.get("/api/orgs/:org/seats/:id/provisions", async (c) => {
   const org = await roleOrg(c, ...DECIDERS);
@@ -2113,5 +2164,6 @@ export default {
     ctx.waitUntil(guardTick(env, "ticketThemes", () => tickTicketThemes(env)));
     ctx.waitUntil(guardTick(env, "errorWatch", () => tickErrorWatch(env)));
     ctx.waitUntil(guardTick(env, "provisions", () => tickProvisions(env)));
+    ctx.waitUntil(guardTick(env, "boxReconcile", () => reconcileBoxes(env)));
   },
 };

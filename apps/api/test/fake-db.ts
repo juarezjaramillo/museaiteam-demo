@@ -29,6 +29,8 @@ export interface FakeTables {
   seat_requests: Row[];
   seat_provisions: Row[];
   tool_admin_grants: Row[];
+  box_state: Row[];
+  box_runs: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -55,6 +57,8 @@ export function blankTables(): FakeTables {
     seat_requests: [],
     seat_provisions: [],
     tool_admin_grants: [],
+    box_state: [],
+    box_runs: [],
   };
 }
 
@@ -201,6 +205,18 @@ export class FakeDB {
             const r = t.tool_admin_grants.find((x) => x.org_id === p[0] && x.tool === p[1] && x.status === "granted");
             return ((r ? { secret_enc: r.secret_enc } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT box_max_concurrent FROM orgs WHERE id = ?")) {
+            const r = t.orgs.find((x) => x.id === p[0]);
+            return ((r ? { box_max_concurrent: r.box_max_concurrent ?? 3 } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT COUNT(*) AS n FROM box_state WHERE org_id = ? AND status = 'running'")) {
+            const n = t.box_state.filter((x) => x.org_id === p[0] && x.status === "running").length;
+            return ({ n } as T) ?? null;
+          }
+          if (q.startsWith("SELECT status FROM box_state WHERE seat_id = ?")) {
+            const r = t.box_state.find((x) => x.seat_id === p[0]);
+            return ((r ? { status: r.status } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT kind, status FROM seat_credentials WHERE org_id = ? AND seat_id = ? AND tool = ?")) {
             const r = t.seat_credentials.find((x) => x.org_id === p[0] && x.seat_id === p[1] && x.tool === p[2]);
             return ((r ? { kind: r.kind, status: r.status } : null) as T) ?? null;
@@ -229,16 +245,36 @@ export class FakeDB {
           if (q.startsWith("SELECT tool FROM seat_provisions WHERE seat_id = ? AND status = 'verified'")) {
             return { results: t.seat_provisions.filter((r) => r.seat_id === p[0] && r.status === "verified").map((r) => ({ tool: r.tool })) as T[] };
           }
-          if (q.startsWith("SELECT p.seat_id, p.tool, p.step, p.status, t.org_id, s.email, s.role FROM seat_provisions p")) {
+          if (q.startsWith("SELECT p.seat_id, p.tool, p.step, p.status, p.attempts,")) {
             const out: Row[] = [];
             for (const pr of t.seat_provisions) {
               if (pr.status !== "pending" && pr.status !== "waiting") continue;
               const s = t.seats.find((x) => x.id === pr.seat_id);
               const team = s ? t.teams.find((x) => x.id === s.team_id) : null;
               if (!s || !team) continue;
-              out.push({ seat_id: pr.seat_id, tool: pr.tool, step: pr.step, status: pr.status, org_id: team.org_id, email: s.email ?? null, role: s.role });
+              out.push({ seat_id: pr.seat_id, tool: pr.tool, step: pr.step, status: pr.status, attempts: pr.attempts ?? 0, org_id: team.org_id, email: s.email ?? null, role: s.role });
             }
             return { results: out.slice(0, 50) as T[] };
+          }
+          if (q.startsWith("SELECT r.seat_id, s.role, r.seconds, r.instance_type")) {
+            const out: Row[] = [];
+            for (const r of t.box_runs) {
+              if (r.org_id !== p[0] || r.started_at < p[1]) continue;
+              const s = t.seats.find((x) => x.id === r.seat_id);
+              if (!s) continue;
+              out.push({ seat_id: r.seat_id, role: s.role, seconds: r.seconds, instance_type: r.instance_type });
+            }
+            return { results: out as T[] };
+          }
+          if (q.startsWith("SELECT r.id, r.seat_id, r.started_at FROM box_runs r")) {
+            const out: Row[] = [];
+            for (const r of t.box_runs) {
+              if (r.stopped_at !== 0 || r.started_at >= p[0]) continue;
+              const s = t.box_state.find((x) => x.seat_id === r.seat_id);
+              if (!s || s.status !== "running") continue;
+              out.push({ id: r.id, seat_id: r.seat_id, started_at: r.started_at });
+            }
+            return { results: out as T[] };
           }
           if (q.startsWith("SELECT mcp_server_id FROM seat_tools WHERE seat_id = ?")) {
             return { results: t.seat_tools.filter((r) => r.seat_id === p[0]) as T[] };
@@ -406,8 +442,8 @@ export class FakeDB {
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO mcp_servers")) {
-            const [id, org_id, name, url, auth, auth_name, source, status] = p as string[];
-            t.mcp_servers.push({ id, org_id, name, url, auth, auth_name, source, status, spend_cap_cents: 0 });
+            const [id, org_id, name, url, auth, auth_name, source, status, box_argv] = p as string[];
+            t.mcp_servers.push({ id, org_id, name, url, auth, auth_name, source, status, spend_cap_cents: 0, box_argv: box_argv ?? "" });
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("DELETE FROM mcp_credentials")) {
@@ -552,8 +588,13 @@ export class FakeDB {
               r.status = status;
               r.detail = "";
             } else {
-              t.seat_provisions.push({ seat_id, tool, step, status, detail: "" });
+              t.seat_provisions.push({ seat_id, tool, step, status, detail: "", attempts: 0 });
             }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seat_provisions SET attempts = ?")) {
+            const r = t.seat_provisions.find((x) => x.seat_id === p[1] && x.tool === p[2]);
+            if (r) r.attempts = p[0] as number;
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("UPDATE seat_provisions SET step = ?")) {
@@ -563,6 +604,49 @@ export class FakeDB {
               r.status = p[1];
               r.detail = p[2];
             }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO box_state")) {
+            const [seat_id, org_id, woken, tick] = p as [string, string, number, number];
+            const r = t.box_state.find((x) => x.seat_id === seat_id);
+            if (r) {
+              r.status = "running";
+              r.woken_at = woken;
+              r.last_tick = tick;
+              r.wake_count = (r.wake_count ?? 0) + 1;
+            } else {
+              t.box_state.push({ seat_id, org_id, status: "running", woken_at: woken, last_tick: tick, wake_count: 1 });
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO box_runs")) {
+            const [id, seat_id, org_id, started_at, instance_type, woken_by] = p as [string, string, string, number, string, string];
+            t.box_runs.push({ id, seat_id, org_id, started_at, stopped_at: 0, seconds: 0, instance_type, woken_by });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE box_state SET last_tick = ?")) {
+            const r = t.box_state.find((x) => x.seat_id === p[1]);
+            if (r) r.last_tick = p[0] as number;
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE box_state SET status = 'sleeping'")) {
+            const r = t.box_state.find((x) => x.seat_id === p[1]);
+            if (r) {
+              r.status = "sleeping";
+              r.last_tick = p[0] as number;
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE box_runs SET stopped_at = ?")) {
+            const r = t.box_runs.find((x) => x.id === p[2]);
+            if (r) {
+              r.stopped_at = p[0] as number;
+              r.seconds = p[1] as number;
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM box_state WHERE seat_id = ?")) {
+            t.box_state = t.box_state.filter((x) => x.seat_id !== p[0]);
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO tool_admin_grants")) {

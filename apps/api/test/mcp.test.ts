@@ -9,6 +9,8 @@ import {
 import {
   addServer,
   callTool,
+  isBoxServer,
+  parseBoxArgv,
   probeServer,
   setTrust,
   type McpServerRow,
@@ -140,6 +142,42 @@ describe("addServer", () => {
       /already added/,
     );
     await expect(addServer(e, "org1", { catalogId: "nope" })).rejects.toThrow(McpError);
+  });
+
+  it("adds box servers without a live probe and validates argv", async () => {
+    const tables = blankTables();
+    const e = env(tables);
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 500 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const added = await addServer(e, "org1", {
+      url: "box:linear-stdio",
+      name: "Linear",
+      boxArgv: { bin: "npx", args: ["-y", "@linear/mcp-server"] },
+    });
+    expect(added.server.status).toBe("pending");
+    expect(added.tools).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(isBoxServer(added.server)).toBe(true);
+    expect(parseBoxArgv(added.server)).toEqual({ bin: "npx", args: ["-y", "@linear/mcp-server"] });
+    await expect(
+      addServer(e, "org1", { url: "box:Bad Name!", boxArgv: { bin: "npx", args: [] } }),
+    ).rejects.toThrow(/box:my-server/);
+    await expect(addServer(e, "org1", { url: "box:noargv" })).rejects.toThrow(/launch command/);
+    await expect(
+      addServer(e, "org1", { url: "box:badbin", boxArgv: { bin: "bash" as "npx", args: [] } }),
+    ).rejects.toThrow(/launch command/);
+  });
+
+  it("box tool calls need a seat and box argv", async () => {
+    const e = env();
+    const server = {
+      id: "s1", org_id: "org1", name: "Box", url: "box:thing",
+      auth: "none", auth_name: "", source: "founder", status: "pending",
+      spend_cap_cents: 0, box_argv: JSON.stringify({ bin: "npx", args: ["-y", "x"] }),
+    } as McpServerRow;
+    await expect(callTool(e, server, "t", {}, null)).rejects.toThrow(/pick the hire/);
+    const broken = { ...server, box_argv: "garbage" };
+    await expect(callTool(e, broken, "t", {}, "seat1")).rejects.toThrow(/broken box setup/);
   });
 });
 

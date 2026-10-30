@@ -6,11 +6,13 @@ import {
   decryptFromB64,
   encryptToB64,
   keyFromHex,
+  type BoxBin,
   type McpAuth,
   type McpCatalogEntry,
   type McpToolAnnotations,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
+import { BoxOffline, provider as boxProvider } from "./box.js";
 import { audit } from "./db.js";
 import { advertisesOAuth, oauthAccess, refreshOAuth } from "./mcp-oauth.js";
 import { seatToken, seatToolIds } from "./seat-creds.js";
@@ -25,6 +27,39 @@ export interface McpServerRow {
   source: string;
   status: string;
   spend_cap_cents: number;
+  box_argv: string;
+}
+
+/** Box-local servers live in the hire's box, not at a URL: `box:<name>`. */
+export function isBoxServer(server: McpServerRow): boolean {
+  return server.url.startsWith("box:");
+}
+
+export interface BoxArgv {
+  bin: BoxBin;
+  args: string[];
+}
+
+const BOX_BINS: readonly string[] = ["node", "python3", "npx"];
+
+/** box_argv is JSON `{bin, args}`; anything else is a corrupt row, loudly. */
+export function parseBoxArgv(server: McpServerRow): BoxArgv {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(server.box_argv || "");
+  } catch {
+    throw new McpError("protocol", `${server.name} has a broken box setup — remove and re-add it`);
+  }
+  const p = parsed as { bin?: unknown; args?: unknown };
+  if (
+    typeof p.bin !== "string" ||
+    !BOX_BINS.includes(p.bin) ||
+    !Array.isArray(p.args) ||
+    !p.args.every((a) => typeof a === "string")
+  ) {
+    throw new McpError("protocol", `${server.name} has a broken box setup — remove and re-add it`);
+  }
+  return { bin: p.bin as BoxBin, args: p.args as string[] };
 }
 
 export interface McpTool {
@@ -162,6 +197,7 @@ export async function probeServerRow(
   server: McpServerRow,
   seatId: string | null = null,
 ): Promise<ProbeResult> {
+  if (isBoxServer(server)) return probeBoxServer(env, server, seatId);
   try {
     return await probeServer(
       server.url,
@@ -184,6 +220,40 @@ export async function probeServerRow(
 }
 
 /**
+ * Probe a box server through a hire's box: wakes it (quota-checked),
+ * lists tools, and leaves the box to sleep on its own. No seat, no
+ * probe — there is no org-wide box to borrow.
+ */
+export async function probeBoxServer(
+  env: Env,
+  server: McpServerRow,
+  seatId: string | null,
+): Promise<ProbeResult> {
+  if (!seatId) throw new McpError("protocol", `${server.name} lives in a hire's box — pick the hire first`);
+  const argv = parseBoxArgv(server);
+  const box = boxProvider();
+  try {
+    await box.wake(env, server.org_id, seatId, `probe:${server.name}`);
+  } catch (err) {
+    if (err instanceof BoxOffline) throw new McpError("protocol", "hire boxes are not connected yet");
+    throw err;
+  }
+  const secret = await serverSecretForSeat(env, server, seatId);
+  const json = (await box.call(env, seatId, "/mcp", {
+    server: server.id,
+    bin: argv.bin,
+    args: argv.args,
+    method: "tools/list",
+    params: {},
+    secrets: secret ? { [server.auth_name || "MCP_TOKEN"]: secret } : {},
+  })) as { result?: { tools?: Array<{ name?: string; description?: string }> } };
+  const tools = (json.result?.tools ?? [])
+    .filter((t) => typeof t.name === "string")
+    .map((t) => ({ name: t.name as string, description: typeof t.description === "string" ? t.description : "" }));
+  return { name: server.name, version: "", tools };
+}
+
+/**
  * The credential for a server row: nothing, the pasted key, or a fresh
  * OAuth token (refreshed proactively inside its last minute).
  */
@@ -198,6 +268,62 @@ export async function serverSecret(env: Env, server: McpServerRow): Promise<stri
  * never throws past the loop — the caller records them as honest proof.
  * OAuth servers get one silent refresh-and-retry on an auth failure.
  */
+/**
+ * Box-local tool call: same gates as remote (the callers check trust and
+ * approvals before reaching here), but the server spawns inside the
+ * hire's box with the hire's secret. Needs a seat — box tools are
+ * per-hire by nature, there is no org-wide box to borrow.
+ */
+export async function callBoxTool(
+  env: Env,
+  server: McpServerRow,
+  tool: string,
+  args: Record<string, unknown>,
+  seatId: string | null,
+): Promise<string> {
+  if (!seatId) throw new McpError("protocol", `${server.name} lives in a hire's box — pick the hire first`);
+  const argv = parseBoxArgv(server);
+  const box = boxProvider();
+  try {
+    await box.wake(env, server.org_id, seatId, `mcp:${server.name}`);
+  } catch (err) {
+    if (err instanceof BoxOffline) throw new McpError("protocol", "hire boxes are not connected yet");
+    throw err;
+  }
+  const secret = await serverSecretForSeat(env, server, seatId);
+  const json = (await box.call(env, seatId, "/mcp", {
+    server: server.id,
+    bin: argv.bin,
+    args: argv.args,
+    method: "tools/call",
+    params: { name: tool, arguments: args },
+    secrets: secret ? { [server.auth_name || "MCP_TOKEN"]: secret } : {},
+  })) as { result?: unknown };
+  return extractToolText({ result: json.result });
+}
+
+/** Shared result reader: stdio and Streamable-HTTP answer the same shape. */
+function extractToolText(json: unknown): string {
+  const result = (
+    json as {
+      result?: {
+        content?: Array<{ type?: string; text?: string }>;
+        isError?: boolean;
+      };
+    }
+  ).result;
+  if (result?.isError) {
+    const msg =
+      result.content?.find((c) => typeof c.text === "string")?.text ?? "tool reported an error";
+    throw new McpError("tool", msg.slice(0, 500));
+  }
+  const text = (result?.content ?? [])
+    .filter((c) => typeof c.text === "string")
+    .map((c) => c.text as string)
+    .join("\n");
+  return text.slice(0, 8000);
+}
+
 export async function callTool(
   env: Env,
   server: McpServerRow,
@@ -206,6 +332,7 @@ export async function callTool(
   seatId: string | null = null,
   retried = false,
 ): Promise<string> {
+  if (isBoxServer(server)) return callBoxTool(env, server, tool, args, seatId);
   const secret = await serverSecretForSeat(env, server, seatId);
   let json: unknown;
   try {
@@ -231,24 +358,7 @@ export async function callTool(
     }
     throw err;
   }
-  const result = (
-    json as {
-      result?: {
-        content?: Array<{ type?: string; text?: string }>;
-        isError?: boolean;
-      };
-    }
-  ).result;
-  if (result?.isError) {
-    const msg =
-      result.content?.find((c) => typeof c.text === "string")?.text ?? "tool reported an error";
-    throw new McpError("tool", msg.slice(0, 500));
-  }
-  const text = (result?.content ?? [])
-    .filter((c) => typeof c.text === "string")
-    .map((c) => c.text as string)
-    .join("\n");
-  return text.slice(0, 8000);
+  return extractToolText(json);
 }
 
 // --- registry ---
@@ -305,6 +415,7 @@ export interface AddServerInput {
   auth?: McpAuth;
   authName?: string;
   secret?: string;
+  boxArgv?: BoxArgv;
 }
 
 /**
@@ -326,8 +437,33 @@ export async function addServer(
   }
   const auth: McpAuth = entry?.auth ?? input.auth ?? "none";
   const authName = entry?.authName ?? input.authName ?? "";
+  const isBox = url.startsWith("box:");
+  if (entry && isBox) throw new McpError("protocol", "catalog servers are remote — box servers are added by hand");
+  let boxArgvJson = "";
+  if (isBox) {
+    const name = url.slice(4).trim();
+    if (!name || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
+      throw new McpError("protocol", "box servers look like box:my-server (lowercase, dashes)");
+    }
+    const argv = input.boxArgv;
+    if (
+      !argv ||
+      typeof argv.bin !== "string" ||
+      !BOX_BINS.includes(argv.bin) ||
+      !Array.isArray(argv.args) ||
+      !argv.args.every((a) => typeof a === "string" && a.length <= 500)
+    ) {
+      throw new McpError("protocol", "box servers need a launch command (node, python3, or npx plus args)");
+    }
+    boxArgvJson = JSON.stringify({ bin: argv.bin, args: argv.args });
+  }
   let probe: ProbeResult;
-  try {
+  if (isBox) {
+    // No live probe at add time: the server runs inside a hire's box,
+    // and waking a box to vet a form costs real money. Tools arrive on
+    // first use, when a seat is known.
+    probe = { name: input.name?.trim() || url.slice(4), version: "", tools: [] };
+  } else try {
     probe = await probeServer(url, input.secret ?? null, auth, authName);
   } catch (err) {
     // OAuth servers answer 401 until connected: an advertised OAuth
@@ -350,8 +486,8 @@ export async function addServer(
   const id = crypto.randomUUID();
   const status = entry ? "trusted" : "pending";
   await env.DB.prepare(
-    `INSERT INTO mcp_servers (id, org_id, name, url, auth, auth_name, source, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO mcp_servers (id, org_id, name, url, auth, auth_name, source, status, box_argv)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -362,6 +498,7 @@ export async function addServer(
       authName,
       entry ? "catalog" : "founder",
       status,
+      boxArgvJson,
     )
     .run();
   if (input.secret) {

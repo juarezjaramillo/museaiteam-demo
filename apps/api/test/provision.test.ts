@@ -54,6 +54,69 @@ describe("provisioning", () => {
     expect(await tickProvisions(e)).toBe(0);
   });
 
+  it("browser provisions open the invite link, never waking without mail", async () => {
+    const calls: string[] = [];
+    const ns = {
+      getByName: (_n: string) => ({
+        fetch: async (req: Request) => {
+          const path = new URL(req.url).pathname;
+          calls.push(path);
+          if (path === "/ping") return Response.json({ ok: true });
+          return Response.json({ ok: true, snapshots: [{ title: "Accept invite" }] });
+        },
+      }),
+    };
+    const { env: e, tables } = env();
+    (e as unknown as Record<string, unknown>).HIRE_BOX = ns;
+    tables.orgs.push({ id: "org1", box_max_concurrent: 3 });
+    tables.seat_provisions.push({ seat_id: "s1", tool: "linear", step: "invite", status: "pending", detail: "", attempts: 0 });
+    expect(await tickProvisions(e)).toBe(1);
+    // No mail: stays pending, box untouched.
+    expect(tables.seat_provisions[0].status).toBe("pending");
+    expect(tables.seat_provisions[0].detail).toMatch(/invite email/);
+    expect(calls).toEqual([]);
+    // Invite arrives: wake, browse, wait on the account.
+    tables.seat_mail.push({
+      id: "m1", seat_id: "s1", message_id: "mm1", from_addr: "n@linear",
+      subject: "invited", body: "join https://linear.test/invite/abc ok",
+      read_at: null, created_at: "",
+    });
+    expect(await tickProvisions(e)).toBe(1);
+    expect(tables.seat_provisions[0].status).toBe("waiting");
+    expect(tables.seat_provisions[0].detail).toMatch(/Accept invite/);
+    expect(calls).toEqual(["/ping", "/browse"]);
+  });
+
+  it("browser failures retry twice, then task the founder", async () => {
+    const ns = {
+      getByName: (_n: string) => ({
+        fetch: async (req: Request) => {
+          if (new URL(req.url).pathname === "/ping") return Response.json({ ok: true });
+          return Response.json({ ok: false, error: "chromium melted" });
+        },
+      }),
+    };
+    const { env: e, tables } = env();
+    (e as unknown as Record<string, unknown>).HIRE_BOX = ns;
+    tables.orgs.push({ id: "org1", box_max_concurrent: 3 });
+    tables.seat_mail.push({
+      id: "m1", seat_id: "s1", message_id: "mm1", from_addr: "n@x",
+      subject: "invited", body: "join https://x.test/i ok",
+      read_at: null, created_at: "",
+    });
+    tables.seat_provisions.push({ seat_id: "s1", tool: "linear", step: "invite", status: "pending", detail: "", attempts: 0 });
+    // First wake leaves the box running; drop it so each tick re-wakes honestly.
+    await tickProvisions(e);
+    tables.box_state.length = 0;
+    await tickProvisions(e);
+    tables.box_state.length = 0;
+    await tickProvisions(e);
+    const row = tables.seat_provisions[0];
+    expect(row.status).toBe("failed");
+    expect(row.attempts).toBe(3);
+    expect(tables.notifications.some((n) => n.kind === "provision.failed")).toBe(true);
+  });
+
   it("verifies token-backed tools and keystones", async () => {
     const { env: e } = env();
     await setSeatCredential(e, "org1", "s1", { tool: "github", kind: "token", secret: "x" });

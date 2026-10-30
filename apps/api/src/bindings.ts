@@ -5,6 +5,7 @@ export interface Env {
   AI: Ai;
   FEED: DurableObjectNamespace;
   RATE_LIMIT: DurableObjectNamespace;
+  HIRE_BOX?: DurableObjectNamespace;
   GOAL_RUN: Workflow;
   APP_URL: string;
   AUTH_SECRET: string;

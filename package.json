@@ -5,12 +5,13 @@
   "type": "module",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "containers/*"
   ],
   "scripts": {
     "dev:api": "npm run dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
-    "test": "node --test packages/shared/test/*.test.js",
+    "test": "node --test packages/shared/test/*.test.js containers/box/*.test.mjs",
     "typecheck": "npm run typecheck -ws --if-present",
     "db:apply:local": "wrangler d1 execute museaiteam --local --file=db/schema.sql"
   }

@@ -3,14 +3,16 @@ import {
   SEAT_MAP_DEFAULT,
   decryptFromB64,
   encryptToB64,
+  firstUrl,
   isSeatMapRole,
   keyFromHex,
   paidTools,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
+import { BoxQuota, boxConfigured, provider } from "./box.js";
 import { audit } from "./db.js";
 import { notify } from "./notify.js";
-import { getSeat } from "./seat-mail.js";
+import { getSeat, listSeatMail } from "./seat-mail.js";
 
 export type ProvisionStrategy = "api" | "browser" | "manual";
 
@@ -244,19 +246,76 @@ async function provisionGithub(
 }
 
 /**
+ * Browser provisioning: the hire opens its own invite email link in its
+ * box. Mail first — a box never wakes with nothing to do. Three
+ * failed attempts become a guided task for the founder, never a
+ * silent stall.
+ */
+async function attemptBrowserProvision(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  tool: string,
+  attempts: number,
+): Promise<void> {
+  if (!boxConfigured(env)) {
+    await setProvision(env, seatId, tool, "invite", "waiting", "queued for the hire's browser");
+    return;
+  }
+  const mail = await listSeatMail(env, orgId, seatId, false);
+  const url = mail.map((m) => firstUrl(`${m.subject}\n${m.body}`)).find((u) => u);
+  if (!url) {
+    await setProvision(env, seatId, tool, "invite", "pending", "waiting for the invite email");
+    return;
+  }
+  const box = provider();
+  try {
+    await box.wake(env, orgId, seatId, `provision:${tool}`);
+    const res = (await box.call(
+      env,
+      seatId,
+      "/browse",
+      { steps: [{ op: "goto", url }, { op: "wait", ms: 2000 }, { op: "snapshot" }] },
+      120_000,
+    )) as { snapshots?: Array<{ title?: string }> };
+    const title = res.snapshots?.[0]?.title?.slice(0, 80) ?? "the invite page";
+    await setProvision(env, seatId, tool, "invite", "waiting", `opened the invite (${title}) — waiting on the account`);
+  } catch (err) {
+    if (err instanceof BoxQuota) {
+      await setProvision(env, seatId, tool, "invite", "pending", "hire computers are busy — retrying");
+      return;
+    }
+    const n = attempts + 1;
+    await env.DB.prepare("UPDATE seat_provisions SET attempts = ? WHERE seat_id = ? AND tool = ?")
+      .bind(n, seatId, tool)
+      .run();
+    if (n >= 3) {
+      await setProvision(env, seatId, tool, "invite", "failed", `the browser could not open the invite: ${String(err).slice(0, 160)}`);
+      await notify(env, orgId, {
+        kind: "provision.failed",
+        title: `${tool} seat needs a hand`.slice(0, 120),
+        body: `The hire tried 3 times to open its ${tool} invite and failed. Check the invite link, then re-run provisioning.`,
+      });
+    } else {
+      await setProvision(env, seatId, tool, "invite", "pending", `browser attempt ${n} failed — retrying`);
+    }
+  }
+}
+
+/**
  * Advance every pending provision one step. API tools act; browser
- * tools park with an honest reason until phase 4 runs them.
+ * tools open their invite in the hire's box.
  */
 export async function tickProvisions(env: Env): Promise<number> {
   const rows = await env.DB.prepare(
-    `SELECT p.seat_id, p.tool, p.step, p.status, t.org_id, s.email, s.role
+    `SELECT p.seat_id, p.tool, p.step, p.status, p.attempts, t.org_id, s.email, s.role
      FROM seat_provisions p
      JOIN seats s ON s.id = p.seat_id
      JOIN teams t ON t.id = s.team_id
      WHERE p.status IN ('pending', 'waiting') LIMIT 50`,
   )
     .bind()
-    .all<ProvisionRow & { org_id: string; email: string | null; role: string }>();
+    .all<ProvisionRow & { org_id: string; email: string | null; role: string; attempts: number }>();
   let acted = 0;
   for (const r of rows.results ?? []) {
     try {
@@ -267,7 +326,7 @@ export async function tickProvisions(env: Env): Promise<number> {
           acted++;
         }
       } else if (strategy === "browser" && r.status === "pending") {
-        await setProvision(env, r.seat_id, r.tool, "invite", "waiting", "queued for the hire's browser");
+        await attemptBrowserProvision(env, r.org_id, r.seat_id, r.tool, r.attempts ?? 0);
         acted++;
       }
     } catch (err) {

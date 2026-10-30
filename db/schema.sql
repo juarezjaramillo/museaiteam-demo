@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS orgs (
   sub_status TEXT NOT NULL DEFAULT 'none',
   idea_allowance_words INTEGER NOT NULL DEFAULT 250000,
   proposal_grace_hours INTEGER NOT NULL DEFAULT 72,
+  box_max_concurrent INTEGER NOT NULL DEFAULT 3,
   stripe_customer_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -411,6 +412,7 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   source TEXT NOT NULL DEFAULT 'founder',
   status TEXT NOT NULL DEFAULT 'pending',
   spend_cap_cents INTEGER NOT NULL DEFAULT 0,
+  box_argv TEXT NOT NULL DEFAULT '',
   added_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(org_id, url)
 );
@@ -511,7 +513,31 @@ CREATE TABLE IF NOT EXISTS seat_provisions (
   step TEXT NOT NULL DEFAULT 'invite',
   status TEXT NOT NULL DEFAULT 'pending',
   detail TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (seat_id, tool)
 );
+
+CREATE TABLE IF NOT EXISTS box_state (
+  seat_id TEXT PRIMARY KEY REFERENCES seats(id) ON DELETE CASCADE,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  status TEXT NOT NULL DEFAULT 'sleeping',
+  woken_at INTEGER NOT NULL DEFAULT 0,
+  last_tick INTEGER NOT NULL DEFAULT 0,
+  wake_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_box_state_org ON box_state(org_id, status);
+
+CREATE TABLE IF NOT EXISTS box_runs (
+  id TEXT PRIMARY KEY,
+  seat_id TEXT NOT NULL REFERENCES seats(id) ON DELETE CASCADE,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  started_at INTEGER NOT NULL,
+  stopped_at INTEGER NOT NULL DEFAULT 0,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  instance_type TEXT NOT NULL DEFAULT 'basic',
+  woken_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_box_runs_org ON box_runs(org_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_box_runs_seat ON box_runs(seat_id, started_at);
 
