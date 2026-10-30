@@ -6,13 +6,13 @@
 
 export const HIRES_DOMAIN = "hires.museaiteam.com";
 
-/** `priya-a1b2c3@hires.museaiteam.com` from role + seat id. */
+/** `priya-a1b2c3d4e5f6@hires.museaiteam.com` from role + seat id. */
 export function seatEmail(role: string, seatId: string): string {
   const clean = role
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `${clean}-${seatId.replace(/[^a-z0-9]/gi, "").slice(0, 6)}@${HIRES_DOMAIN}`;
+  return `${clean}-${seatId.replace(/[^a-z0-9]/gi, "").slice(0, 12)}@${HIRES_DOMAIN}`;
 }
 
 /** Pull the first hire address out of a To/Cc list, if any. */

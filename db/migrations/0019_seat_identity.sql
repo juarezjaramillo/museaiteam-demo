@@ -1,5 +1,5 @@
 ALTER TABLE seats ADD COLUMN email TEXT;
-UPDATE seats SET email = role || '-' || substr(id, 1, 6) || '@hires.museaiteam.com' WHERE email IS NULL;
+UPDATE seats SET email = role || '-' || substr(replace(id, '-', ''), 1, 12) || '@hires.museaiteam.com' WHERE email IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_seats_email ON seats(email);
 
 CREATE TABLE IF NOT EXISTS seat_mail (

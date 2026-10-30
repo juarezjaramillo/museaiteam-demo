@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { HIRES_DOMAIN, parseHireAddress, seatEmail } from "../src/seat-email.ts";
 
 test("derives stable hire addresses", () => {
-  assert.equal(seatEmail("analyst", "abc123-def"), `analyst-abc123@${HIRES_DOMAIN}`);
+  assert.equal(seatEmail("analyst", "abc123-def456"), `analyst-abc123def456@${HIRES_DOMAIN}`);
   assert.equal(seatEmail("support", "zzz"), `support-zzz@${HIRES_DOMAIN}`);
 });
 
