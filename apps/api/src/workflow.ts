@@ -100,6 +100,7 @@ import { executeRevert } from "./revert.js";
 import { chargeIdea } from "./allowance.js";
 import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
 import { hireToken, markSeatLost, seatForRole, seatReadyForServer, seatToolIds } from "./seat-creds.js";
+import { askForSeats, seatAskLines, toolForServer } from "./provision.js";
 
 export interface GoalRunParams {
   runId: string;
@@ -1486,12 +1487,13 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       .join("\n");
     let history = "";
     let executed = 0;
+    const askLines = loopSeat ? await seatAskLines(this.env, loopSeat).catch(() => []) : [];
     for (let step = 0; step < MCP_MAX_STEPS; step++) {
       const run = await getRun(this.env, runId);
       if (!run || run.kill_flag === 1) return;
       let plan: { done: boolean; calls: Array<{ server: string; tool: string; args: Record<string, unknown> }>; tokens: number };
       try {
-        plan = await runMcpStep(this.env, { goal, decision, shelf: shelfText, history });
+        plan = await runMcpStep(this.env, { goal, decision, shelf: shelfText, history, asks: askLines });
       } catch (err) {
         await audit(this.env, runId, "workflow", "mcp.plan_failed", {
           error: String(err).slice(0, 160),
@@ -1501,6 +1503,33 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       await touchRun(this.env, runId, { tokens_used: plan.tokens });
       if (plan.done || !plan.calls.length) break;
       for (const call of plan.calls) {
+        // The hire asks for seats by name. Dedupe makes repeats free.
+        if (call.server.toLowerCase() === "seat" && call.tool.toLowerCase() === "request") {
+          const reason = typeof call.args.reason === "string" ? call.args.reason : "the hire needs it for the goal";
+          if (!loopSeat) {
+            await this.recordAction(runId, "mcp.tool", "seat.request", "failed", undefined, {
+              error: "no hire seat to ask from",
+            });
+            history += `\n- seat.request: failed (no hire seat)`;
+            continue;
+          }
+          try {
+            const asked = await askForSeats(this.env, orgId, loopSeat, call.args.tools, reason);
+            await this.recordAction(runId, "mcp.tool", "seat.request", "done", undefined, {
+              filed: asked.filed,
+              reason: reason.slice(0, 200),
+            });
+            history += asked.filed.length > 0
+              ? `\n- seat.request: asked for ${asked.filed.join(", ")}`
+              : `\n- seat.request: already asked — waiting on the founder`;
+          } catch (err) {
+            await this.recordAction(runId, "mcp.tool", "seat.request", "failed", undefined, {
+              error: String(err).slice(0, 200),
+            });
+            history += `\n- seat.request: failed (${String(err).slice(0, 100)})`;
+          }
+          continue;
+        }
         const found = shelf.find(
           ({ server }) => server.name.toLowerCase() === call.server.toLowerCase(),
         );
@@ -1548,13 +1577,23 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
         // skips per call — the team does other work meanwhile, and the
         // skip shows up as doing-meanwhile instead of a failure.
         if (loopSeat && !(await seatReadyForServer(this.env, orgId, loopSeat, found.server.id))) {
+          // First skip files the ask; later skips are free (dedupe).
+          const asked = await askForSeats(
+            this.env,
+            orgId,
+            loopSeat,
+            [toolForServer(found.server)],
+            `hit while using ${found.server.name}.${tool.name}`,
+          ).catch(() => ({ requestId: null, filed: [] as string[] }));
           await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "skipped", undefined, {
             server: found.server.name,
             tool: tool.name,
             reason: "seatless",
             note: `waiting on the hire's own ${found.server.name} seat — doing other work meanwhile`,
           });
-          history += `\n- ${found.server.name}.${tool.name}: skipped (hire seat not ready yet)`;
+          history += asked.filed.length > 0
+            ? `\n- ${found.server.name}.${tool.name}: skipped (asked for ${asked.filed.join(", ")})`
+            : `\n- ${found.server.name}.${tool.name}: skipped (hire seat not ready yet)`;
           continue;
         }
         if (isSensitiveTool(tool.name, tool.annotations, tagsForUrl(found.server.url))) {

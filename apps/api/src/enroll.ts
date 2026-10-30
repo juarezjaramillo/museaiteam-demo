@@ -1,9 +1,10 @@
-import { KEYSTONE_SEAT, hireDisplayName } from "@museaiteam/shared";
+import { KEYSTONE_SEAT, hireDisplayName, paidTools } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { boxSpend } from "./box.js";
 import { audit } from "./db.js";
 import { createGoal } from "./goals.js";
 import { notify } from "./notify.js";
+import { listSeatCredentials, type SeatCred } from "./seat-creds.js";
 import { getSeat } from "./seat-mail.js";
 import { RunConflict, RunThrottled, createWorkRun } from "./staffing.js";
 
@@ -131,6 +132,8 @@ export interface TeamSeat {
   waiting: Array<{ tool: string; step: string; status: string; detail: string }>;
   box: string;
   spend: { seconds: number; cents: number } | null;
+  request: { id: string; status: string; tools: string[]; paid: string[] } | null;
+  logins: Array<{ tool: string; kind: string; status: string; expires: string | null }>;
 }
 
 /**
@@ -168,6 +171,22 @@ export async function teamSeats(
     const verified = new Set(
       (prov.results ?? []).filter((p) => p.status === "verified").map((p) => p.tool),
     );
+    const req = await env.DB.prepare(
+      "SELECT id, tools_json, status FROM seat_requests WHERE seat_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+      .bind(s.id)
+      .first<{ id: string; tools_json: string; status: string }>();
+    let request: TeamSeat["request"] = null;
+    if (req) {
+      let tools: string[] = [];
+      try {
+        tools = (JSON.parse(req.tools_json) as unknown[]).filter((t): t is string => typeof t === "string");
+      } catch {
+        tools = [];
+      }
+      request = { id: req.id, status: req.status, tools, paid: paidTools(tools) };
+    }
+    const creds: SeatCred[] = await listSeatCredentials(env, orgId, s.id).catch(() => []);
     seats.push({
       id: s.id,
       role: s.role,
@@ -180,6 +199,8 @@ export async function teamSeats(
       waiting: (prov.results ?? []).filter((p) => p.status !== "verified"),
       box: box?.status ?? "none",
       spend: spend.find((x) => x.seatId === s.id) ?? null,
+      request,
+      logins: creds.map((c) => ({ tool: c.tool, kind: c.kind, status: c.status, expires: c.expires_at })),
     });
   }
   const skips = await env.DB.prepare(

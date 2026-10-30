@@ -4,9 +4,11 @@ import {
   decryptFromB64,
   encryptToB64,
   firstUrl,
+  hireDisplayName,
   isSeatMapRole,
   keyFromHex,
   paidTools,
+  PROVIDER_IDS,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { BoxQuota, boxConfigured, provider } from "./box.js";
@@ -76,6 +78,177 @@ export interface SeatRequest {
   created_at: string;
 }
 
+export function normalizeTools(tools: unknown): string[] {
+  if (!Array.isArray(tools)) return [];
+  return [...new Set(
+    tools
+      .filter((t): t is string => typeof t === "string")
+      .map((t) => t.trim().toLowerCase().slice(0, 120))
+      .filter(Boolean),
+  )].slice(0, 20);
+}
+
+/**
+ * Tool id an MCP server provisions as: known providers by name, anything
+ * else as its own box tool. Pure, so the mapping is unit-pinned.
+ */
+export function toolForServer(server: { id: string; name: string; url: string }): string {
+  const hay = `${server.name} ${server.url}`.toLowerCase();
+  for (const p of PROVIDER_IDS) {
+    if (hay.includes(p)) return p;
+  }
+  return `mcp:${server.id}`;
+}
+
+/** Tools with no live coverage: not verified, provisioning, or asked. */
+export async function uncoveredTools(env: Env, seatId: string, tools: string[]): Promise<string[]> {
+  const live = await env.DB.prepare(
+    "SELECT tool FROM seat_provisions WHERE seat_id = ? AND status IN ('verified', 'pending', 'waiting')",
+  )
+    .bind(seatId)
+    .all<{ tool: string }>();
+  const covered = new Set((live.results ?? []).map((r) => r.tool));
+  const open = await env.DB.prepare(
+    "SELECT tools_json FROM seat_requests WHERE seat_id = ? AND status = 'proposed'",
+  )
+    .bind(seatId)
+    .all<{ tools_json: string }>();
+  for (const r of open.results ?? []) {
+    try {
+      for (const t of JSON.parse(r.tools_json) as unknown[]) {
+        if (typeof t === "string") covered.add(t);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return tools.filter((t) => !covered.has(t));
+}
+
+async function paidBlocked(env: Env, orgId: string, tools: string[]): Promise<string[]> {
+  const gate = await trialGate(env, orgId);
+  return gate.status.subscribed ? [] : paidTools(tools);
+}
+
+/**
+ * What the hire is waiting on, as brief lines: open asks plus seats
+ * still provisioning. Empty means fully seated.
+ */
+export async function seatAskLines(env: Env, seatId: string): Promise<string[]> {
+  const lines: string[] = [];
+  const open = await env.DB.prepare(
+    "SELECT tools_json FROM seat_requests WHERE seat_id = ? AND status = 'proposed'",
+  )
+    .bind(seatId)
+    .all<{ tools_json: string }>();
+  for (const r of open.results ?? []) {
+    try {
+      const tools = (JSON.parse(r.tools_json) as unknown[]).filter((t): t is string => typeof t === "string");
+      if (tools.length > 0) lines.push(`asked the founder for: ${tools.join(", ")} (waiting on approval)`);
+    } catch {
+      /* ignore */
+    }
+  }
+  const prov = await env.DB.prepare(
+    "SELECT tool, detail FROM seat_provisions WHERE seat_id = ? AND status IN ('pending', 'waiting') ORDER BY tool",
+  )
+    .bind(seatId)
+    .all<{ tool: string; detail: string }>();
+  for (const r of prov.results ?? []) {
+    lines.push(`${r.tool}: getting ready${r.detail ? ` — ${r.detail.slice(0, 120)}` : ""}`);
+  }
+  return lines;
+}
+
+/**
+ * The hire asks for seats mid-work: files once per tool (merging into
+ * the open card), notifies once per new tool. Returns what was filed —
+ * empty means everything was already covered, never an error.
+ */
+export async function askForSeats(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  tools: unknown,
+  reason: string,
+): Promise<{ requestId: string | null; filed: string[] }> {
+  const seat = await getSeat(env, orgId, seatId);
+  if (!seat) throw new Error("seat not found");
+  const fresh = await uncoveredTools(env, seatId, normalizeTools(tools));
+  const open = await env.DB.prepare(
+    "SELECT id, tools_json FROM seat_requests WHERE seat_id = ? AND status = 'proposed' LIMIT 1",
+  )
+    .bind(seatId)
+    .first<{ id: string; tools_json: string }>();
+  if (fresh.length === 0) return { requestId: open?.id ?? null, filed: [] };
+  let requestId: string;
+  let merged: string[];
+  if (open) {
+    let current: string[] = [];
+    try {
+      current = (JSON.parse(open.tools_json) as unknown[]).filter((t): t is string => typeof t === "string");
+    } catch {
+      current = [];
+    }
+    merged = [...new Set([...current, ...fresh])].slice(0, 20);
+    await env.DB.prepare("UPDATE seat_requests SET tools_json = ?, nudged_at = NULL WHERE id = ?")
+      .bind(JSON.stringify(merged), open.id)
+      .run();
+    requestId = open.id;
+  } else {
+    requestId = crypto.randomUUID();
+    merged = fresh;
+    await env.DB.prepare(
+      "INSERT INTO seat_requests (id, org_id, seat_id, tools_json, status) VALUES (?, ?, ?, ?, 'proposed')",
+    )
+      .bind(requestId, orgId, seatId, JSON.stringify(merged))
+      .run();
+  }
+  const paid = paidTools(merged);
+  await notify(env, orgId, {
+    kind: "seat.requested",
+    title: `${hireDisplayName(seat.role)} asked for ${fresh.join(", ")}`.slice(0, 120),
+    body: `${reason.slice(0, 200)}${paid.length > 0 ? ` Paid seats in the card: ${paid.join(", ")}.` : ""}`,
+  });
+  await audit(env, null, "system", "seat.asked", { org: orgId, seat: seatId, tools: fresh });
+  return { requestId, filed: fresh };
+}
+
+/**
+ * The founder grants tools directly: no ask card, straight to
+ * provisions, audited as a grant. Trial still blocks paid tools.
+ */
+export async function grantSeats(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  userId: string,
+  tools: unknown,
+): Promise<{ granted: string[] } | { trial: string[] }> {
+  const seat = await getSeat(env, orgId, seatId);
+  if (!seat) throw new Error("seat not found");
+  const fresh = await uncoveredTools(env, seatId, normalizeTools(tools));
+  if (fresh.length === 0) return { granted: [] };
+  const blocked = await paidBlocked(env, orgId, fresh);
+  if (blocked.length > 0) return { trial: blocked };
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    "INSERT INTO seat_requests (id, org_id, seat_id, tools_json, status, decided_by, decided_at) VALUES (?, ?, ?, ?, 'approved', ?, datetime('now'))",
+  )
+    .bind(id, orgId, seatId, JSON.stringify(fresh), userId)
+    .run();
+  for (const tool of fresh) {
+    await env.DB.prepare(
+      `INSERT INTO seat_provisions (seat_id, tool, step, status) VALUES (?, ?, 'invite', 'pending')
+       ON CONFLICT(seat_id, tool) DO UPDATE SET step = 'invite', status = 'pending', detail = '', updated_at = datetime('now')`,
+    )
+      .bind(seatId, tool)
+      .run();
+  }
+  await audit(env, null, "human", "seat.granted", { org: orgId, seat: seatId, tools: fresh });
+  return { granted: fresh };
+}
+
 /**
  * Compute a hire's asks: map tools + extras, minus tools already
  * verified. One open request per seat — repeats return the open one.
@@ -126,6 +299,7 @@ export async function decideSeatRequest(
   requestId: string,
   userId: string,
   approve: boolean,
+  exclude: string[] = [],
 ): Promise<"ok" | "notfound" | "decided" | "trial"> {
   const row = await env.DB.prepare(
     "SELECT id, seat_id, tools_json, status FROM seat_requests WHERE id = ? AND org_id = ?",
@@ -135,23 +309,30 @@ export async function decideSeatRequest(
   if (!row) return "notfound";
   if (row.status !== "proposed") return "decided";
   const tools = JSON.parse(row.tools_json) as string[];
+  const excluded = new Set(normalizeTools(exclude));
+  const approved = tools.filter((t) => !excluded.has(t));
+  if (approve && approved.length === 0) approve = false;
   if (approve) {
     // Trial gate lives here, not in the route, so no caller — UI,
     // approve-all, future API — can release paid seats unpaid.
-    const gate = await trialGate(env, orgId);
-    const paid = gate.status.subscribed ? [] : paidTools(tools);
-    if (paid.length > 0) return "trial";
+    const blocked = await paidBlocked(env, orgId, approved);
+    if (blocked.length > 0) return "trial";
   }
   const status = approve ? "approved" : "denied";
   const claimed = await env.DB.prepare(
-    "UPDATE seat_requests SET status = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ? AND status = 'proposed'",
+    "UPDATE seat_requests SET status = ?, decided_by = ?, decided_at = datetime('now'), tools_json = ? WHERE id = ? AND status = 'proposed'",
   )
-    .bind(status, userId, row.id)
+    .bind(status, userId, JSON.stringify(approve ? approved : tools), row.id)
     .run();
   if ((claimed.meta.changes ?? 0) !== 1) return "decided";
-  await audit(env, null, "human", "seat.request_decided", { org: orgId, id: row.id, status });
+  await audit(env, null, "human", "seat.request_decided", {
+    org: orgId,
+    id: row.id,
+    status,
+    excluded: [...excluded].filter((t) => tools.includes(t)),
+  });
   if (approve) {
-    for (const tool of tools) {
+    for (const tool of approved) {
       await env.DB.prepare(
         `INSERT INTO seat_provisions (seat_id, tool, step, status) VALUES (?, ?, 'invite', 'pending')
          ON CONFLICT(seat_id, tool) DO UPDATE SET step = 'invite', status = 'pending', detail = '', updated_at = datetime('now')`,

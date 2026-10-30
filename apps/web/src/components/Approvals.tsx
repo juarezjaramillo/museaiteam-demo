@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { hireDisplayName } from "@museaiteam/shared";
 import { api, type ApprovalRow, type ProposalRow } from "../api.js";
 import { actionLabel, approvalKindLabel, statusLabel } from "@museaiteam/shared";
 
@@ -7,6 +8,62 @@ const OUTCOME_WORDS: Record<string, string> = {
   resubmitted: "Sent back for a retry",
   failed: "Failed — retry cap reached",
 };
+
+interface SeatAsk {
+  id: string;
+  seatId: string;
+  role: string;
+  email: string | null;
+  tools: string[];
+  paid: string[];
+  status: string;
+}
+
+function SeatAskCard({ org, ask, done }: { org: string; ask: SeatAsk; done: () => void }) {
+  const [off, setOff] = useState<string[]>([]);
+  const [msg, setMsg] = useState("");
+
+  function toggle(tool: string) {
+    setOff((prev) => (prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool]));
+  }
+
+  async function decide(approve: boolean) {
+    setMsg("");
+    try {
+      await api.decideSeatRequest(org, ask.id, approve, approve ? off : []);
+      done();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  return (
+    <li>
+      <div className="card-head">
+        <strong>{hireDisplayName(ask.role)}</strong>
+        <span className="dim">{ask.email ?? ""}</span>
+        {ask.paid.length > 0 && <span className="badge warn">paid: {ask.paid.join(", ")}</span>}
+      </div>
+      <ul className="list">
+        {ask.tools.map((t) => (
+          <li key={t}>
+            <label>
+              <input type="checkbox" checked={!off.includes(t)} onChange={() => toggle(t)} /> {t}
+              {ask.paid.includes(t) && <span className="dim"> (paid seat)</span>}
+            </label>
+          </li>
+        ))}
+      </ul>
+      <div className="row">
+        <button className="primary sm" onClick={() => decide(true)}>
+          Approve{off.length > 0 ? ` (${ask.tools.length - off.length})` : " all"}
+        </button>
+        <button className="danger sm" onClick={() => decide(false)}>Deny</button>
+      </div>
+      {msg && <p className="dim">{msg}</p>}
+    </li>
+  );
+}
 
 export function Approvals({
   org,
@@ -17,6 +74,7 @@ export function Approvals({
 }) {
   const [rows, setRows] = useState<ApprovalRow[]>([]);
   const [ideas, setIdeas] = useState<ProposalRow[]>([]);
+  const [asks, setAsks] = useState<SeatAsk[]>([]);
   const [status, setStatus] = useState("");
   const [msg, setMsg] = useState("");
   const [note, setNote] = useState("");
@@ -29,6 +87,12 @@ export function Approvals({
       setIdeas(p.proposals.filter((x) => x.status === "proposed" || x.status === "reminded"));
     } catch {
       setIdeas([]);
+    }
+    try {
+      const q = await api.getSeatRequests(org);
+      setAsks(q.requests.filter((x) => x.status === "proposed"));
+    } catch {
+      setAsks([]);
     }
   }
 
@@ -122,6 +186,16 @@ export function Approvals({
       </div>
       <p className="page-sub">Results waiting on your decision.</p>
       {msg && <p className="dim">{msg}</p>}
+      {asks.length > 0 && (
+        <section>
+          <h2>Seat asks from the team</h2>
+          <ul className="list">
+            {asks.map((a) => (
+              <SeatAskCard key={a.id} org={org} ask={a} done={() => load()} />
+            ))}
+          </ul>
+        </section>
+      )}
       {ideas.length > 0 && (
         <section>
           <h2>Ideas from the team</h2>

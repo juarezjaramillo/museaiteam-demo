@@ -209,6 +209,14 @@ export class FakeDB {
             const r = t.seat_requests.find((x) => x.seat_id === p[0] && x.status === "proposed");
             return ((r ?? null) as T) ?? null;
           }
+          if (q.startsWith("SELECT id, tools_json FROM seat_requests WHERE seat_id = ? AND status = 'proposed' LIMIT 1")) {
+            const r = t.seat_requests.find((x) => x.seat_id === p[0] && x.status === "proposed");
+            return ((r ? { id: r.id, tools_json: r.tools_json } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id, tools_json, status FROM seat_requests WHERE seat_id = ? ORDER BY created_at DESC LIMIT 1")) {
+            const r = t.seat_requests.find((x) => x.seat_id === p[0]);
+            return ((r ? { id: r.id, tools_json: r.tools_json, status: r.status } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT id, seat_id, tools_json, status FROM seat_requests WHERE id = ? AND org_id = ?")) {
             const r = t.seat_requests.find((x) => x.id === p[0] && x.org_id === p[1]);
             return ((r ?? null) as T) ?? null;
@@ -304,6 +312,27 @@ export class FakeDB {
               results: t.seat_provisions
                 .filter((r) => r.seat_id === p[0] && r.status !== "verified")
                 .map((r) => ({ tool: r.tool, status: r.status })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT tool FROM seat_provisions WHERE seat_id = ? AND status IN ('verified', 'pending', 'waiting')")) {
+            return {
+              results: t.seat_provisions
+                .filter((r) => r.seat_id === p[0] && ["verified", "pending", "waiting"].includes(r.status))
+                .map((r) => ({ tool: r.tool })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT tools_json FROM seat_requests WHERE seat_id = ? AND status = 'proposed'")) {
+            return {
+              results: t.seat_requests
+                .filter((r) => r.seat_id === p[0] && r.status === "proposed")
+                .map((r) => ({ tools_json: r.tools_json })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT tool, detail FROM seat_provisions WHERE seat_id = ? AND status IN ('pending', 'waiting')")) {
+            return {
+              results: t.seat_provisions
+                .filter((r) => r.seat_id === p[0] && (r.status === "pending" || r.status === "waiting"))
+                .map((r) => ({ tool: r.tool, detail: r.detail ?? "" })) as T[],
             };
           }
           if (q.startsWith("SELECT tool FROM seat_provisions WHERE seat_id = ? AND status = 'verified'")) {
@@ -730,8 +759,22 @@ export class FakeDB {
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO seat_requests")) {
-            const [id, org_id, seat_id, tools_json] = p as string[];
-            t.seat_requests.push({ id, org_id, seat_id, tools_json, status: "proposed", created_at: "" });
+            const [id, org_id, seat_id, tools_json, decided_by] = p as string[];
+            const approved = q.includes("'approved'");
+            t.seat_requests.push({
+              id, org_id, seat_id, tools_json,
+              status: approved ? "approved" : "proposed",
+              decided_by: approved ? decided_by : null,
+              created_at: "",
+            });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seat_requests SET tools_json = ?")) {
+            const r = t.seat_requests.find((x) => x.id === p[1]);
+            if (r) {
+              r.tools_json = p[0] as string;
+              r.nudged_at = null;
+            }
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("UPDATE seat_requests SET nudged_at = datetime('now')")) {
@@ -762,10 +805,11 @@ export class FakeDB {
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("UPDATE seat_requests SET status = ?")) {
-            const r = t.seat_requests.find((x) => x.id === p[2] && x.status === "proposed");
+            const r = t.seat_requests.find((x) => x.id === p[3] && x.status === "proposed");
             if (r) {
               r.status = p[0];
               r.decided_by = p[1];
+              r.tools_json = p[2] as string;
               return { meta: { changes: 1 } };
             }
             return { meta: { changes: 0 } };

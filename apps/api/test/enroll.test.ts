@@ -14,6 +14,7 @@ vi.mock("../src/staffing.js", async (orig) => {
 });
 
 import { maybeStartSessionOne, nudgeSeatRequests, teamSeats } from "../src/enroll.js";
+import { setSeatCredential } from "../src/seat-creds.js";
 import { FakeDB, blankTables } from "./fake-db.js";
 
 const KEY = "ab".repeat(32);
@@ -53,6 +54,19 @@ describe("enrollment", () => {
     expect(await nudgeSeatRequests(e)).toBe(0);
   });
 
+  it("team seats show the open ask, paid tools, and login health", async () => {
+    const { env: e } = env();
+    await setSeatCredential(e, "org1", "s1", { tool: "figma", kind: "session", secret: "s", expiresAtMs: Date.now() + 3600_000 });
+    const { askForSeats } = await import("../src/provision.js");
+    await askForSeats(e, "org1", "s1", ["github"], "need it");
+    const view = await teamSeats(e, "org1");
+    const s = view.seats[0];
+    expect(s.request?.status).toBe("proposed");
+    expect(s.request?.tools).toEqual(["github"]);
+    expect(s.request?.paid).toEqual(["github"]);
+    expect(s.logins).toEqual([{ tool: "figma", kind: "session", status: "ok", expires: expect.any(String) }]);
+  });
+
   it("team seats aggregate on/waiting/box/spend/meanwhile", async () => {
     const { env: e, tables } = env();
     tables.seat_provisions.push(
@@ -74,6 +88,8 @@ describe("enrollment", () => {
     expect(s.waiting.map((w) => w.tool)).toEqual(["linear"]);
     expect(s.box).toBe("running");
     expect(s.spend?.seconds).toBe(60);
+    expect(s.request).toBeNull();
+    expect(s.logins).toEqual([]);
     expect(view.meanwhile).toEqual(["waiting on the hire's own X seat"]);
   });
 });

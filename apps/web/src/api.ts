@@ -352,6 +352,8 @@ export const api = {
         waiting: Array<{ tool: string; step: string; status: string; detail: string }>;
         box: string;
         spend: { seconds: number; cents: number } | null;
+        request: { id: string; status: string; tools: string[]; paid: string[] } | null;
+        logins: Array<{ tool: string; kind: string; status: string; expires: string | null }>;
       }>;
       meanwhile: string[];
     }>(`/api/orgs/${org}/team/seats`),
@@ -385,6 +387,29 @@ export const api = {
     }>(`/api/orgs/${org}/cutover/migrate`, { method: "POST" }),
   flipCutover: (org: string) =>
     req<{ ok: boolean }>(`/api/orgs/${org}/cutover/flip`, { method: "POST" }),
+  getSeatRequests: (org: string) =>
+    req<{
+      requests: Array<{
+        id: string;
+        seatId: string;
+        role: string;
+        email: string | null;
+        tools: string[];
+        paid: string[];
+        status: string;
+        createdAt: string;
+      }>;
+    }>(`/api/orgs/${org}/seat-requests`),
+  decideSeatRequest: (org: string, id: string, approve: boolean, exclude: string[]) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/seat-requests/${id}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ approve, exclude }),
+    }),
+  grantSeatTools: (org: string, seatId: string, tools: string[]) =>
+    req<{ granted: string[] }>(`/api/orgs/${org}/seats/${seatId}/tools`, {
+      method: "POST",
+      body: JSON.stringify({ tools }),
+    }),
   getBilling: (org: string) =>
     req<{
       subscribed: boolean;

@@ -477,7 +477,7 @@ export interface McpStepCall {
  */
 export async function runMcpStep(
   env: Env,
-  input: { goal: string; decision: string; shelf: string; history: string },
+  input: { goal: string; decision: string; shelf: string; history: string; asks?: string[] },
 ): Promise<{ done: boolean; calls: McpStepCall[]; tokens: number }> {
   const client = new SparkClient(env);
   const user = [
@@ -485,6 +485,8 @@ export async function runMcpStep(
     `Decision: ${input.decision}`,
     "",
     `Tool shelf (server: tool — what it does):\n${input.shelf || "(no tools)"}`,
+    "seat: request — ask the founder for tool seats you need but don't have. Args: {\"tools\": [\"figma\", ...], \"reason\": \"why, in one sentence\"}. File once per tool; already-asked tools are ignored.",
+    input.asks?.length ? `\nYour seat asks (do not re-ask these):\n- ${input.asks.join("\n- ")}` : "",
     input.history ? `\nEarlier calls and results:\n${input.history}` : "",
     "",
     "Plan the next tool calls that move the goal forward, or finish. At most 3 calls. Prefer reads over writes; writes that spend, subscribe, delete, or share need the founder's approval and pause the loop, so only ask for one when it is truly needed.",

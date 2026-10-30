@@ -64,6 +64,7 @@ import {
 import { fireSeat, sweepFrozenSeats } from "./offboard.js";
 import {
   decideSeatRequest,
+  grantSeats,
   requestSeats,
   setSeatMap,
   seatMapFor,
@@ -1380,15 +1381,34 @@ app.get("/api/orgs/:org/seat-requests", async (c) => {
 
 app.post(
   "/api/orgs/:org/seat-requests/:id/decide",
-  zValidator("json", z.object({ approve: z.boolean() })),
+  zValidator("json", z.object({ approve: z.boolean(), exclude: z.array(z.string().max(120)).max(20).optional() })),
   async (c) => {
     const org = await roleOrg(c, ...DECIDERS);
     if (!org) return c.json({ error: "forbidden" }, 403);
-    const res = await decideSeatRequest(c.env, org, c.req.param("id"), c.get("user").id, c.req.valid("json").approve);
+    const b = c.req.valid("json");
+    const res = await decideSeatRequest(c.env, org, c.req.param("id"), c.get("user").id, b.approve, b.exclude ?? []);
     if (res === "notfound") return c.json({ error: "not found" }, 404);
     if (res === "decided") return c.json({ error: "already decided" }, 409);
     if (res === "trial") return c.json({ error: "trial covers free tools only — paid seats wait for a subscription" }, 403);
     return c.json({ ok: true });
+  },
+);
+
+app.post(
+  "/api/orgs/:org/seats/:id/tools",
+  zValidator("json", z.object({ tools: z.array(z.string().min(1).max(120)).min(1).max(20) })),
+  async (c) => {
+    const org = await roleOrg(c, ...DECIDERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    try {
+      const res = await grantSeats(c.env, org, c.req.param("id"), c.get("user").id, c.req.valid("json").tools);
+      if ("trial" in res) {
+        return c.json({ error: `trial covers free tools only — paid seats wait: ${res.trial.join(", ")}` }, 403);
+      }
+      return c.json({ granted: res.granted });
+    } catch (err) {
+      return c.json({ error: String(err).slice(0, 120) }, 404);
+    }
   },
 );
 

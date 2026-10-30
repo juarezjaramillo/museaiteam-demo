@@ -108,6 +108,13 @@ is an employee: its own inbox, its own seats, its own computer.
 4. Team step: per hire — seats on / waiting / doing-meanwhile.
 5. Unapproved asks re-nudge weekly (existing proposal rhythm);
    denied asks close with a note and the hire plans around them.
+6. Mid-work asks: first seatless skip auto-files (dedupe makes
+   repeats free); the hire can also ask by name via `seat.request`.
+   Asks merge into one open card per hire; the brief lists pending
+   asks so the hire plans around them.
+7. Founder control: approve-all with per-tool exclude, deny with a
+   note, or grant tools directly (straight to provisions, audited,
+   trial-gated). Asks surface in Approvals (act) and Hires (context).
 
 ## 6. Offboarding
 

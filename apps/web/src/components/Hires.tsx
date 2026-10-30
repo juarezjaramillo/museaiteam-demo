@@ -15,6 +15,45 @@ interface SeatView {
   waiting: Array<{ tool: string; step: string; status: string; detail: string }>;
   box: string;
   spend: { seconds: number; cents: number } | null;
+  request: { id: string; status: string; tools: string[]; paid: string[] } | null;
+  logins: Array<{ tool: string; kind: string; status: string; expires: string | null }>;
+}
+
+function GrantForm({ org, seatId, done }: { org: string; seatId: string; done: () => void }) {
+  const [tools, setTools] = useState("");
+  const [msg, setMsg] = useState("");
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button className="link" onClick={() => setOpen(true)}>
+        give tools
+      </button>
+    );
+  }
+  async function grant() {
+    setMsg("");
+    try {
+      const r = await api.grantSeatTools(org, seatId, tools.split(/[,\s]+/).filter(Boolean));
+      setTools("");
+      setOpen(false);
+      done();
+      if (r.granted.length === 0) setMsg("Nothing new — all covered.");
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+  return (
+    <span className="row">
+      <input
+        placeholder="figma, linear"
+        value={tools}
+        onChange={(e) => setTools(e.target.value)}
+      />
+      <button className="primary" onClick={grant}>Give</button>
+      <button className="link" onClick={() => setOpen(false)}>cancel</button>
+      {msg && <span className="dim">{msg}</span>}
+    </span>
+  );
 }
 
 function RelayForm({ org, seatId, tool, done }: { org: string; seatId: string; tool: string; done: () => void }) {
@@ -149,10 +188,33 @@ export function Hires({ org, role }: { org: string; role: string }) {
                 <> · {Math.round(s.spend.seconds / 60)} min on the desk (${(s.spend.cents / 100).toFixed(2)} guess)</>
               )}
             </div>
+            {s.request && s.request.status === "proposed" && (
+              <div>
+                Asked for: {s.request.tools.map((t) => (
+                  <span key={t} className="badge warn">{t}</span>
+                ))}
+                {s.request.paid.length > 0 && (
+                  <span className="dim"> (paid: {s.request.paid.join(", ")})</span>
+                )}{" "}
+                <span className="dim">— answer in Approvals</span>
+              </div>
+            )}
             {s.on.length > 0 && (
               <div>Ready: {s.on.map((t) => (
                 <span key={t} className="badge soft">{t}</span>
               ))}</div>
+            )}
+            {s.logins.length > 0 && (
+              <div className="dim">
+                Logins: {s.logins.map((l) => (
+                  <span key={l.tool}>
+                    {l.tool} ({l.status}{l.status === "ok" && l.expires ? `, ok till ${l.expires.slice(0, 10)}` : ""}){" "}
+                  </span>
+                ))}
+              </div>
+            )}
+            {canDecide && (
+              <div><GrantForm org={org} seatId={s.id} done={load} /></div>
             )}
             {s.waiting.length > 0 && (
               <ul className="list">
