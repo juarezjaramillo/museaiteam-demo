@@ -63,6 +63,21 @@ for (const t of NAV) {
   else GROUPS.push({ section: t.section, items: [t] });
 }
 
+/** Hash routing: `#/hires` is a link, a reload restore, and Back/Forward. */
+function tabFromHash(): Tab {
+  const id = location.hash.match(/^#\/([a-z]+)/)?.[1];
+  return NAV.some((t) => t.id === id) ? (id as Tab) : "home";
+}
+
+function initialTab(): Tab {
+  // OAuth round-trips land on Setup (where the connect started), not Home.
+  if (!location.hash) {
+    const q = new URLSearchParams(location.search);
+    if (q.get("connected") || q.get("error")) return "setup";
+  }
+  return tabFromHash();
+}
+
 export function App() {
   const [org, setOrg] = useState("demo");
   const [orgs, setOrgs] = useState<Array<{ id: string; name: string; role: string }>>([]);
@@ -83,7 +98,25 @@ export function App() {
   const [wizardOpen, setWizardOpen] = useState(
     () => localStorage.getItem("wizard-done") !== "1",
   );
-  const [tab, setTab] = useState<Tab>("home");
+  const [tab, setTabState] = useState<Tab>(initialTab);
+
+  function go(t: Tab) {
+    setTabState(t);
+    if (location.hash !== `#/${t}`) location.hash = `#/${t}`;
+  }
+
+  useEffect(() => {
+    const onHash = () => setTabState(tabFromHash());
+    window.addEventListener("hashchange", onHash);
+    // Reflect the initial tab (e.g. the Setup landing) without history noise.
+    const want = initialTab();
+    if (location.hash !== `#/${want}`) {
+      location.replace(`#/${want}`);
+      setTabState(want);
+    }
+    return () => window.removeEventListener("hashchange", onHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [goalId, setGoalId] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [run, setRun] = useState<RunRow | null>(null);
@@ -199,12 +232,12 @@ export function App() {
     setRunId(id);
     setRun(null);
     setEvents([]);
-    setTab("runs");
+    go("runs");
   }
 
   function openGoal(id: string) {
     setGoalId(id);
-    setTab("goals");
+    go("goals");
   }
 
   const active =
@@ -235,7 +268,7 @@ export function App() {
                   <button
                     key={t.id}
                     className={`nav-item${tab === t.id ? " on" : ""}`}
-                    onClick={() => setTab(t.id)}
+                    onClick={() => go(t.id)}
                   >
                     <Icon d={t.icon} />
                     {t.label}
@@ -298,7 +331,7 @@ export function App() {
             {trial.state === "expired" && (
               <>
                 Trial expired — subscribe to keep running ($499/worker).{" "}
-                <button className="sm" onClick={() => setTab("billing")}>
+                <button className="sm" onClick={() => go("billing")}>
                   See plans
                 </button>
               </>
@@ -332,7 +365,7 @@ export function App() {
         )}
 
         {tab === "home" && (
-          <Home org={org} go={(t) => setTab(t)} onGoal={openGoal} onRun={openRun} />
+          <Home org={org} go={(t) => go(t)} onGoal={openGoal} onRun={openRun} />
         )}
 
         {tab === "goals" && (
