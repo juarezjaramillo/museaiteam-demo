@@ -133,8 +133,8 @@ if (tab === "hires") {
     await new Promise((r) => setTimeout(r, 400));
   }
   const menus = await page.$$(".hire .icon-btn");
-  if (menus[0]) {
-    await menus[0].click();
+  if (menus[1]) {
+    await menus[1].click();
     await new Promise((r) => setTimeout(r, 400));
   }
 }

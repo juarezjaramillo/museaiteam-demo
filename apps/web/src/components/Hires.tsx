@@ -181,9 +181,9 @@ function HireCard({
           </button>
           {menuOpen && (
             <span className="menu" onClick={(e) => e.stopPropagation()}>
-              {s.box === "sleeping" && canDecide && (
+              {s.box !== "running" && canDecide && (
                 <button className="link" onClick={() => { onMenu(false); act(() => api.wakeBox(org, s.id), "Computer is busy or offline."); }}>
-                  Wake computer
+                  {s.box === "sleeping" ? "Wake computer" : "Start computer"}
                 </button>
               )}
               {role === "owner" && (
