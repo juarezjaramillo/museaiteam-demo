@@ -1164,3 +1164,37 @@ table.guards input.narrow {
     width: 5rem;
   }
 }
+
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s3);
+}
+
+.step-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.step-head .grow {
+  flex: 1;
+}
+
+.step-head .grow .dim {
+  margin: 0;
+}
+
+.step-num {
+  flex: none;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  background: var(--grad);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-family: var(--font-display);
+}
