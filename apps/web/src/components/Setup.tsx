@@ -1,5 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { LIVE_PROVIDERS, SEAT_ROLES } from "@museaiteam/shared";
+import {
+  LIVE_PROVIDERS,
+  PROVIDER_IDS,
+  SEAT_ROLES,
+  WRITE_SCOPES,
+  isKnownProvider,
+  providerLabel,
+  scopeLabel,
+} from "@museaiteam/shared";
 import { api, type GuardrailRow, type McpCatalogEntry, type McpServer, type TeamRow } from "../api.js";
 import { GoButton } from "./GoButton.js";
 
@@ -12,26 +20,50 @@ function GuardEditor({
   row: GuardrailRow;
   onSaved: () => void;
 }) {
-  const [systems, setSystems] = useState(row.systems.join(", "));
-  const [scope, setScope] = useState(row.write_scope.join(", "));
-  const [cap, setCap] = useState(String(row.spend_cap_cents));
-  const [escalate, setEscalate] = useState(row.escalate_on.join(", "));
+  const [systems, setSystems] = useState<string[]>(row.systems);
+  const [scope, setScope] = useState<string[]>(row.write_scope);
+  const [cap, setCap] = useState((row.spend_cap_cents / 100).toFixed(0));
   const [busy, setBusy] = useState(false);
-  const split = (s: string) =>
-    s
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean);
+  const knownScopeIds = new Set(
+    PROVIDER_IDS.flatMap((p) => WRITE_SCOPES[p].map((s) => s.id)),
+  );
+  // Values typed before the pickers existed ride along untouched —
+  // shown as removable tags, never silently dropped by a save.
+  const customSystems = systems.filter((s) => !isKnownProvider(s));
+  const customScopes = scope.filter((s) => !knownScopeIds.has(s));
+
+  function toggle(list: string[], v: string): string[] {
+    return list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
+  }
+
+  function toggleSystem(p: string) {
+    const next = toggle(systems, p);
+    // A change without its system is always denied, so unchecking a
+    // system drops its changes too — the dead combo can't be saved.
+    setSystems(next);
+    if (!next.includes(p) && isKnownProvider(p)) {
+      const ids = new Set(WRITE_SCOPES[p].map((s) => s.id));
+      setScope((prev) => prev.filter((s) => !ids.has(s)));
+    }
+  }
+
+  function toggleScope(system: string, id: string) {
+    setScope((prev) => toggle(prev, id));
+    // A change implies its system — checking one checks the other.
+    if (!scope.includes(id) && !systems.includes(system)) {
+      setSystems((prev) => [...prev, system]);
+    }
+  }
 
   async function save() {
     setBusy(true);
     try {
       await api.putGuardrails(org, {
         worker_role: row.worker_role,
-        systems: split(systems),
-        write_scope: split(scope),
-        spend_cap_cents: Number(cap) || 0,
-        escalate_on: split(escalate),
+        systems,
+        write_scope: scope,
+        spend_cap_cents: Math.round(Number(cap) * 100) || 0,
+        escalate_on: row.escalate_on,
       });
       onSaved();
     } finally {
@@ -46,18 +78,60 @@ function GuardEditor({
         {!row.configured && <span className="dim"> · default</span>}
       </td>
       <td>
-        <input value={systems} onChange={(e) => setSystems(e.target.value)} />
+        {PROVIDER_IDS.map((p) => (
+          <label className="ask-tool" key={p}>
+            <input
+              type="checkbox"
+              checked={systems.includes(p)}
+              onChange={() => toggleSystem(p)}
+            />
+            <span>{providerLabel(p)}</span>
+          </label>
+        ))}
+        {customSystems.map((s) => (
+          <span className="dim" key={s}>
+            Also: {s}{" "}
+            <button className="link sm" onClick={() => setSystems(systems.filter((x) => x !== s))}>
+              remove
+            </button>
+          </span>
+        ))}
       </td>
       <td>
-        <input value={scope} onChange={(e) => setScope(e.target.value)} />
+        {PROVIDER_IDS.filter((p) => systems.includes(p)).map((p) => (
+          <div key={p}>
+            <span className="dim">{providerLabel(p)}</span>
+            {WRITE_SCOPES[p].map((s) => (
+              <label className="ask-tool" key={s.id}>
+                <input
+                  type="checkbox"
+                  checked={scope.includes(s.id)}
+                  onChange={() => toggleScope(p, s.id)}
+                />
+                <span>{s.label}</span>
+              </label>
+            ))}
+          </div>
+        ))}
+        {customScopes.map((s) => (
+          <span className="dim" key={s}>
+            Also: {s}{" "}
+            <button className="link sm" onClick={() => setScope(scope.filter((x) => x !== s))}>
+              remove
+            </button>
+          </span>
+        ))}
       </td>
       <td>
-        <input
-          className="narrow"
-          value={cap}
-          onChange={(e) => setCap(e.target.value)}
-          title="0 = unlimited"
-        />
+        <label>
+          ${" "}
+          <input
+            className="narrow"
+            value={cap}
+            onChange={(e) => setCap(e.target.value)}
+            title="0 = no limit"
+          />
+        </label>
       </td>
       <td>
         <button onClick={save} disabled={busy}>
@@ -104,11 +178,24 @@ function IdeasEditor({ org }: { org: string }) {
       </p>
       <div className="row">
         <label>
-          Nightly idea words <input value={cap} onChange={(e) => setCap(e.target.value)} />
+          Nightly idea words{" "}
+          <input
+            type="number"
+            min={0}
+            value={cap}
+            onChange={(e) => setCap(e.target.value)}
+          />
         </label>
         <label>
-          Idea wait (hours, 24–168){" "}
-          <input className="narrow" value={grace} onChange={(e) => setGrace(e.target.value)} />
+          Idea wait (hours){" "}
+          <input
+            type="number"
+            className="narrow"
+            min={24}
+            max={168}
+            value={grace}
+            onChange={(e) => setGrace(e.target.value)}
+          />
         </label>
         <button onClick={save}>Save</button>
         {msg && <span className="dim">{msg}</span>}
@@ -149,6 +236,93 @@ function Step({
   );
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+function ServerKeyForm({
+  org,
+  server,
+  keyHelp,
+  reload,
+  notify,
+}: {
+  org: string;
+  server: McpServer;
+  keyHelp: string;
+  reload: () => void;
+  notify: (m: string) => void;
+}) {
+  const [secret, setSecret] = useState("");
+  async function save() {
+    try {
+      await api.putMcpSecret(org, server.id, secret);
+      setSecret("");
+      notify("Key saved.");
+      reload();
+    } catch (e) {
+      notify(String(e));
+    }
+  }
+  return (
+    <span>
+      <input
+        type="password"
+        placeholder="API key"
+        value={secret}
+        onChange={(e) => setSecret(e.target.value)}
+      />{" "}
+      <button className="sm" onClick={save} disabled={!secret}>
+        Save key
+      </button>
+      <div className="dim">{keyHelp}</div>
+    </span>
+  );
+}
+
+function ServerCapForm({
+  org,
+  server,
+  reload,
+  notify,
+}: {
+  org: string;
+  server: McpServer;
+  reload: () => void;
+  notify: (m: string) => void;
+}) {
+  const [dollars, setDollars] = useState((server.spendCapCents / 100).toFixed(0));
+  async function save() {
+    try {
+      await api.putMcpCap(org, server.id, Math.round(Number(dollars) * 100) || 0);
+      notify("Cap saved.");
+      reload();
+    } catch (e) {
+      notify(String(e));
+    }
+  }
+  return (
+    <span>
+      <label>
+        Max paid trials ${" "}
+        <input
+          className="narrow"
+          value={dollars}
+          onChange={(e) => setDollars(e.target.value)}
+        />
+      </label>{" "}
+      <button className="sm" onClick={save}>
+        Save
+      </button>{" "}
+      <span className="dim">0 = paid plans always ask</span>
+    </span>
+  );
+}
+
 function ToolsStep({
   org,
   conns,
@@ -171,7 +345,7 @@ function ToolsStep({
   const [savedParent, setSavedParent] = useState("");
   const [products, setProducts] = useState<Array<{ id: string; title: string }>>([]);
   const [url, setUrl] = useState("");
-  const [secret, setSecret] = useState("");
+  const [q, setQ] = useState("");
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
@@ -208,30 +382,6 @@ function ToolsStep({
           : `Added ${r.server.name} — it asks for trust on first use.`,
       );
       setUrl("");
-      setSecret("");
-      reload();
-    } catch (e) {
-      setMsg(String(e));
-    }
-  }
-
-  async function saveSecret(id: string) {
-    setMsg("");
-    try {
-      await api.putMcpSecret(org, id, secret);
-      setMsg("Key saved.");
-      setSecret("");
-      reload();
-    } catch (e) {
-      setMsg(String(e));
-    }
-  }
-
-  async function saveCap(id: string, dollars: string) {
-    setMsg("");
-    try {
-      await api.putMcpCap(org, id, Math.round(Number(dollars) * 100) || 0);
-      setMsg("Cap saved.");
       reload();
     } catch (e) {
       setMsg(String(e));
@@ -266,7 +416,7 @@ function ToolsStep({
       </p>
       {LIVE_PROVIDERS.map((p) => (
         <div className="conn-row" key={p}>
-          <strong>{p}</strong>{" "}
+          <strong>{providerLabel(p)}</strong>{" "}
           {conns[p] === "connected" ? (
             <span>
               <span className="badge soft">connected</span>{" "}
@@ -312,7 +462,7 @@ function ToolsStep({
         <div className="conn-row" key={s.id}>
           <div>
             <strong>{s.name}</strong>{" "}
-            <span className="dim">{s.url}</span>{" "}
+            <span className="dim">{hostOf(s.url)}</span>{" "}
             {s.status === "trusted" ? (
               <span className="badge soft">trusted</span>
             ) : s.status === "rejected" ? (
@@ -331,31 +481,15 @@ function ToolsStep({
               <GoButton href={api.mcpConnectUrl(org, s.id)} className="sm">Connect</GoButton>
             )}
             {(s.auth === "header" || s.auth === "query") && !s.hasSecret && (
-              <span>
-                <input
-                  type="password"
-                  placeholder="API key"
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                />{" "}
-                <button className="sm" onClick={() => saveSecret(s.id)} disabled={!secret}>
-                  Save key
-                </button>
-                <div className="dim">
-                  {catalog.find((c) => c.url === s.url)?.keyHelp || "Paste the service's API key."}
-                </div>
-              </span>
-            )}
-            <label>
-              Max paid trials ${" "}
-              <input
-                className="narrow"
-                defaultValue={(s.spendCapCents / 100).toFixed(0)}
-                key={s.id + s.spendCapCents}
-                onBlur={(e) => saveCap(s.id, e.target.value)}
-                title="0 = paid plans always ask"
+              <ServerKeyForm
+                org={org}
+                server={s}
+                keyHelp={catalog.find((c) => c.url === s.url)?.keyHelp || "Paste the service's API key."}
+                reload={reload}
+                notify={notify}
               />
-            </label>
+            )}
+            <ServerCapForm org={org} server={s} reload={reload} notify={notify} />
             {s.status === "pending" && (
               <span>
                 <button className="sm" onClick={() => trust(s.id, "trusted")}>Trust</button>{" "}
@@ -371,8 +505,23 @@ function ToolsStep({
       ))}
       <details>
         <summary className="sum-h">Add more tools</summary>
+        <div className="row">
+          <input
+            placeholder="Search tools…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
         {catalog
           .filter((c) => !servers.some((s) => s.url === c.url))
+          .filter((c) => {
+            const needle = q.trim().toLowerCase();
+            return (
+              !needle ||
+              c.name.toLowerCase().includes(needle) ||
+              c.blurb.toLowerCase().includes(needle)
+            );
+          })
           .map((c) => (
             <div className="conn-row" key={c.id}>
               <div>
@@ -508,7 +657,7 @@ function TeamStep({
             >
               {SEAT_ROLES.map((r) => (
                 <option key={r} value={r}>
-                  {r}
+                  {r.slice(0, 1).toUpperCase() + r.slice(1)}
                 </option>
               ))}
             </select>
@@ -556,8 +705,8 @@ function LimitCard({
           <span className="dim">safe defaults</span>
         ) : (
           <span className="dim">
-            touches {row.systems.join(", ") || "nothing"} · changes{" "}
-            {row.write_scope.join(", ") || "nothing"}
+            touches {row.systems.map(providerLabel).join(", ") || "nothing"} ·
+            changes {row.write_scope.map(scopeLabel).join(", ") || "nothing"}
           </span>
         )}
       </div>
@@ -627,7 +776,7 @@ function LimitsStep({
               ))}
             </tbody>
           </table>
-          <p className="dim">Spend is in cents. 0 means no limit.</p>
+          <p className="dim">Spend is in dollars. 0 means no limit.</p>
         </div>
       )}
     </div>

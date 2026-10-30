@@ -1093,7 +1093,7 @@ th svg {
   vertical-align: -2px;
 }
 
-table.guards input {
+table.guards input:not([type="checkbox"]) {
   width: 100%;
   font-size: 0.82rem;
   padding: var(--s1) var(--s2);

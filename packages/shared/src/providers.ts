@@ -27,6 +27,54 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
 };
 
 /**
+ * What a hire may change inside each system. The ids are the exact
+ * strings the API's guard checks compare — add a new write in the API
+ * and add its label here, or no dashboard can offer it. Labels stay in
+ * plain words for the Limits pickers.
+ */
+export const WRITE_SCOPES: Record<ProviderId, Array<{ id: string; label: string }>> = {
+  github: [
+    { id: "code", label: "Code" },
+    { id: "pr", label: "Pull requests" },
+  ],
+  linear: [
+    { id: "ticket", label: "Tickets" },
+    { id: "subtask", label: "Subtasks" },
+    { id: "transition", label: "Status changes" },
+    { id: "comment", label: "Comments" },
+  ],
+  slack: [
+    { id: "message", label: "Messages" },
+    { id: "thread", label: "Threads" },
+    { id: "digest", label: "Digests" },
+  ],
+  shopify: [
+    { id: "discount", label: "Discounts" },
+    { id: "product", label: "Products" },
+  ],
+  hubspot: [
+    { id: "triage", label: "Ticket sorting" },
+    { id: "note", label: "Notes" },
+    { id: "followup", label: "Follow-ups" },
+  ],
+  notion: [{ id: "db", label: "Database entries" }],
+};
+
+const SCOPE_LABELS: Record<string, string> = Object.fromEntries(
+  PROVIDER_IDS.flatMap((p) => WRITE_SCOPES[p].map((s) => [s.id, s.label])),
+);
+
+/** Plain-words label for a write-scope id; unknown ids pass through. */
+export function scopeLabel(id: string): string {
+  return SCOPE_LABELS[id] ?? id;
+}
+
+/** Plain-words label for a provider id; unknown ids pass through. */
+export function providerLabel(id: string): string {
+  return isKnownProvider(id) ? PROVIDER_LABELS[id] : id;
+}
+
+/**
  * Tool id an MCP server provisions as: known providers by name, anything
  * else as its own box tool. Shared so the dashboard picker and the API
  * can never disagree on what a server grants. Pure, unit-pinned.

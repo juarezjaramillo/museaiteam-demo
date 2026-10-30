@@ -55,6 +55,18 @@ const FIX = {
   },
   "/api/orgs/o1/approvals": { approvals: [] },
   "/api/orgs/o1/proposals": { proposals: [] },
+  "/api/orgs/o1/connections": {
+    status: { github: "connected", linear: "expired", slack: "missing", shopify: "missing", hubspot: "missing", notion: "connected" },
+    retiring: { github: "Moss" },
+    cutOver: false,
+  },
+  "/api/orgs/o1/guardrails": [
+    { worker_role: "engineer", systems: ["github"], write_scope: ["code", "pr"], spend_cap_cents: 5000, escalate_on: [], configured: true },
+    { worker_role: "pm", systems: ["linear", "notion"], write_scope: ["ticket", "comment"], spend_cap_cents: 2000, escalate_on: [], configured: true },
+    { worker_role: "marketer", systems: [], write_scope: [], spend_cap_cents: 0, escalate_on: [], configured: false },
+  ],
+  "/api/orgs/o1/config/notion": { config: {} },
+  "/api/orgs/o1/shopify/products": { products: [] },
   "/api/orgs/o1/mcp": {
     servers: [
       { id: "srv-figma", name: "Figma", url: "https://mcp.figma.com", auth: "header", authName: "token", source: "founder", status: "trusted", spendCapCents: 0, hasSecret: true },
@@ -69,7 +81,7 @@ const server = createServer(async (req, res) => {
     const u = new URL(req.url, "http://x");
     if (u.pathname.startsWith("/api/")) {
       // Normalize the org segment so fixtures match any org id.
-      const key = (u.pathname + u.search).replace(/\/api\/orgs\/[^/]+\//, "/api/orgs/o1/");
+      const key = (u.pathname + u.search).replace(/\/api\/orgs\/[^/]+/, "/api/orgs/o1");
       const hit = FIX[key] ?? null;
       if (!hit) console.log("UNMOCKED:", req.method, key);
       res.writeHead(200, { "content-type": "application/json" });
@@ -114,7 +126,7 @@ page.on("request", (req) => {
       req.respond({ status: 204, headers: CORS, body: "" });
       return;
     }
-    const key = url.slice(API.length).replace(/\/api\/orgs\/[^/]+\//, "/api/orgs/o1/");
+    const key = url.slice(API.length).replace(/\/api\/orgs\/[^/]+/, "/api/orgs/o1");
     const hit = FIX[key] ?? null;
     if (!hit) console.log("UNMOCKED:", req.method(), key);
     req.respond({
@@ -164,7 +176,20 @@ if (tab === "hires") {
     await new Promise((r) => setTimeout(r, 400));
   }
 }
-await page.screenshot({ path: `/tmp/shots/${tab}.png` });
+if (tab === "setup") {
+  for (const text of ["Add more tools", "Advanced: exact tools and scopes"]) {
+    const els = await page.$$(text.startsWith("Add") ? "summary" : "button");
+    for (const el of els) {
+      const t = await el.evaluate((n) => n.textContent);
+      if (t?.includes(text)) {
+        await el.click();
+        await new Promise((r) => setTimeout(r, 400));
+        break;
+      }
+    }
+  }
+}
+await page.screenshot({ path: `/tmp/shots/${tab}.png`, fullPage: tab === "setup" });
 // Fixtures always describe a signed-in founder: a Sign in link means the
 // mocks silently stopped applying and the shot would prove nothing.
 const signedOut = await page.evaluate(() =>
