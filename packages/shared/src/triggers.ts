@@ -22,10 +22,13 @@ export const TRIGGER_FLAT_SPAN_MS = 48 * 3600 * 1000;
 export const TRIGGER_STALE_MS = 14 * 24 * 3600 * 1000;
 
 function parseTs(ts: string): number {
+  // Metric points store SQLite datetime('now') — UTC without a marker.
+  // Bind it to UTC explicitly so local timezones can't skew staleness.
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(ts)) {
+    return Date.parse(`${ts.replace(" ", "T")}Z`);
+  }
   const direct = Date.parse(ts);
-  if (Number.isFinite(direct)) return direct;
-  const sqlite = Date.parse(`${ts}Z`);
-  return Number.isFinite(sqlite) ? sqlite : NaN;
+  return Number.isFinite(direct) ? direct : NaN;
 }
 
 export function evaluateTrigger(points: TriggerPoint[]): TriggerVerdict {

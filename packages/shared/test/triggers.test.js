@@ -36,6 +36,18 @@ test("fires when flat across 5 points and 48h", () => {
   assert.match(r.reason, /flat at 7/);
 });
 
+test("reads SQLite datetime stamps as UTC", () => {
+  const rows = [0, 1, 2, 3, 4].map((d) => ({
+    ts: `2026-10-0${d + 1} 12:00:00`,
+    value: 9,
+  }));
+  const r = evaluateTrigger(rows);
+  assert.equal(r.fired, true);
+  assert.match(r.reason, /flat at 9 for 4 days/);
+  assert.equal(isTriggerStale(rows, Date.parse("2026-10-06T00:00:00Z")), false);
+  assert.equal(isTriggerStale(rows, Date.parse("2026-11-01T00:00:00Z")), true);
+});
+
 test("needs points and quiet feeds flag stale", () => {
   assert.equal(evaluateTrigger(pts([5, 6])).fired, false);
   assert.equal(isTriggerStale([], base), true);
