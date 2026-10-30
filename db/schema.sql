@@ -423,3 +423,17 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
   code_verifier TEXT,
   status TEXT NOT NULL DEFAULT 'pending'
 );
+
+CREATE TABLE IF NOT EXISTS peer_reviews (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  round INTEGER NOT NULL DEFAULT 1,
+  reviewer TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  metric_touched TEXT NOT NULL DEFAULT '[]',
+  decision TEXT NOT NULL DEFAULT 'ok',
+  revision_run_id TEXT REFERENCES runs(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(run_id, round)
+);

@@ -699,6 +699,14 @@ app.get("/api/runs/:id/detail", async (c) => {
   )
     .bind(id)
     .all<{ id: string; kind: string; status: string; goal: string }>();
+  const reviews = await q<{
+    reviewer: string;
+    verdict: string;
+    note: string;
+    decision: string;
+  }>(
+    "SELECT reviewer, verdict, note, decision FROM peer_reviews WHERE run_id = ? ORDER BY round",
+  );
   return c.json({
     run,
     proposals,
@@ -707,6 +715,7 @@ app.get("/api/runs/:id/detail", async (c) => {
     actions,
     ratings: await runRatings(c.env, id),
     children: children.results ?? [],
+    reviews,
   });
 });
 

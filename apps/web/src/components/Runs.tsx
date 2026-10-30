@@ -127,6 +127,9 @@ export function RunDetailView({
         <span className="dim">{d.run.tokens_used.toLocaleString()} tokens</span>
       </div>
       <p>{d.run.goal}</p>
+      {d.run.brief_note.startsWith("Metric trigger:") && (
+        <p><span className="dim">Why this session — </span>{d.run.brief_note}</p>
+      )}
       <div className="card card-hi">
         <div className="card-head">
           <strong>Summary</strong>
@@ -138,6 +141,13 @@ export function RunDetailView({
         {d.run.self_critique && (
           <p><span className="dim">Morgan's take — </span>{d.run.self_critique}</p>
         )}
+        {(d.reviews ?? []).map((r, i) => (
+          <p key={i}>
+            <span className="dim">Checked by {crewName(r.reviewer)} — </span>
+            {r.verdict === "pass" ? "passed" : "sent back"}
+            {r.note ? `: ${r.note}` : ""}
+          </p>
+        ))}
       </div>
       <section>
         <h2>Results</h2>

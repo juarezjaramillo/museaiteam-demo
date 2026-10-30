@@ -14,6 +14,7 @@ import {
   isSensitiveTool,
   mcpCallLabel,
   nextAttempt,
+  ownerFor,
   type Action,
   type Proposal,
   type SeatRole,
@@ -83,15 +84,21 @@ import {
   runEngineerDiff,
   runManagerRuling,
   runMcpStep,
+  runMetricVerdict,
+  runPeerReview,
   runPmSplit,
+  runTiebreak,
   runProductCopy,
   runProposals,
   runSupportTriage,
   runVotes,
   type GoalContext,
 } from "./agents.js";
-import { addEvent, recordRunSummary } from "./goals.js";
-import { promoteQueued, settleFailedRun } from "./staffing.js";
+import { addEvent, goalTimeline, recordRunSummary } from "./goals.js";
+import { addFeedback } from "./feedback.js";
+import { executeRevert } from "./revert.js";
+import { chargeIdea } from "./allowance.js";
+import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
 
 export interface GoalRunParams {
   runId: string;
@@ -156,6 +163,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
 
     const memory = await this.recallSafe(runId, run.org_id, run.goal);
     const playbook = await approvedPlaybook(this.env, run.org_id).catch(() => []);
+    const history = await this.goalHistory(run.goal_id, runId);
     const ctx: GoalContext = {
       goal: run.brief_note
         ? `${run.goal}\n\nFounder brief: ${run.brief_note}`
@@ -169,6 +177,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       round: run.rounds_used + 1,
       memory,
       playbook,
+      history,
     };
 
     // The squad was fixed at creation (goal squad or org pick) and stored
@@ -360,6 +369,31 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     }
   }
 
+  /** Last 3 settled sessions on the goal, newest last, for context. */
+  private async goalHistory(
+    goalId: string | null,
+    runId: string,
+  ): Promise<string[]> {
+    if (!goalId) return [];
+    try {
+      const timeline = await goalTimeline(this.env, goalId);
+      return timeline
+        .filter((e) => e.kind.startsWith("run."))
+        .slice(0, 3)
+        .reverse()
+        .map((e) => {
+          const d = e.detail as { decision?: unknown; runId?: unknown };
+          if (d.runId === runId) return "";
+          const decision =
+            typeof d.decision === "string" ? ` — decided: ${d.decision.slice(0, 120)}` : "";
+          return `${e.title}${decision}`.slice(0, 200);
+        })
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   private async ruleBody(runId: string): Promise<StepOutcome> {
     const { liveness, run } = await checkLiveness(
       this.env,
@@ -421,6 +455,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
         round: run.rounds_used + 1,
         memory: await this.recallSafe(runId, run.org_id, run.goal),
         playbook: await approvedPlaybook(this.env, run.org_id).catch(() => []),
+        history: await this.goalHistory(run.goal_id, runId),
       };
       const { ruling, tokens } = await runManagerRuling(
         this.env,
@@ -1599,6 +1634,200 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     });
   }
 
+  /**
+   * Peer review: a second seat re-checks shipped results before they
+   * count. Fail goes back for exactly one revision; a failed revision
+   * goes to the manager, who ships or halts — no ping-pong by
+   * construction. Acts touching the goal's number get a manager
+   * keep/revert call. Retry-safe: a recorded round replays its
+   * decision, never re-reviews or re-spawns.
+   */
+  private async reviewBody(runId: string): Promise<StepOutcome> {
+    const { liveness, run } = await checkLiveness(
+      this.env,
+      runId,
+      MAX_DEBATE_ROUNDS,
+    );
+    if (liveness !== "alive" || !run) {
+      return liveness === "halted" ? "halted" : "failed";
+    }
+    if (run.kind === "sandbox") return "ok";
+    const existing = await this.env.DB.prepare(
+      "SELECT decision, revision_run_id FROM peer_reviews WHERE run_id = ? AND round = 1",
+    )
+      .bind(runId)
+      .first<{ decision: string; revision_run_id: string | null }>();
+    if (existing) return existing.decision === "halted" ? "halted" : "ok";
+    const acts = await this.env.DB.prepare(
+      `SELECT id, kind, target, proof FROM actions WHERE run_id = ?
+       AND status = 'done' AND target NOT LIKE 'closeout:%' ORDER BY rowid`,
+    )
+      .bind(runId)
+      .all<{ id: string; kind: string; target: string; proof: string | null }>();
+    const done = acts.results ?? [];
+    if (!done.length) return "ok";
+    let lineup: string[] = [];
+    try {
+      const parsed = JSON.parse(run.lineup) as unknown;
+      if (Array.isArray(parsed)) lineup = parsed.filter((r): r is string => typeof r === "string");
+    } catch {
+      /* reviewer falls back below */
+    }
+    const authors = new Set(done.map((a) => ownerFor(a.kind)));
+    const reviewer = !authors.has("qa")
+      ? "qa"
+      : (lineup.find((r) => !authors.has(r)) ?? "manager");
+    const ruling = await this.env.DB.prepare(
+      `SELECT decision FROM rulings WHERE run_id = ?
+       ORDER BY attempt DESC LIMIT 1`,
+    )
+      .bind(runId)
+      .first<{ decision: string }>();
+    const lines = done
+      .map((a) => {
+        let summary = a.target;
+        if (a.proof) {
+          try {
+            const p = JSON.parse(a.proof) as { summary?: unknown };
+            if (typeof p.summary === "string") summary = p.summary;
+          } catch {
+            /* target stands */
+          }
+        }
+        return `${a.id}: ${actionLabel(a.kind)} — ${summary.slice(0, 160)}`;
+      })
+      .join("\n");
+    let review: { verdict: "pass" | "fail"; note: string; metricTouched: string[]; tokens: number };
+    try {
+      review = await runPeerReview(this.env, {
+        goal: run.goal,
+        decision: ruling?.decision ?? "(none)",
+        actions: lines,
+      });
+    } catch (err) {
+      await audit(this.env, runId, "workflow", "review.skipped", {
+        error: String(err).slice(0, 160),
+      });
+      return "ok";
+    }
+    await touchRun(this.env, runId, { tokens_used: review.tokens });
+    const touched = review.metricTouched.filter((id) => done.some((a) => a.id === id));
+    const record = (decision: string, revisionRunId: string | null) =>
+      this.env.DB.prepare(
+        `INSERT INTO peer_reviews (id, run_id, round, reviewer, verdict, note,
+           metric_touched, decision, revision_run_id)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(run_id, round) DO NOTHING`,
+      )
+        .bind(
+          crypto.randomUUID(),
+          runId,
+          reviewer,
+          review.verdict,
+          review.note,
+          JSON.stringify(touched),
+          decision,
+          revisionRunId,
+        )
+        .run();
+    if (review.verdict === "fail") {
+      await addFeedback(
+        this.env,
+        run.org_id,
+        "peer-review",
+        `${reviewer} rejected ${run.goal.slice(0, 80)}: ${review.note}`,
+        runId,
+      ).catch(() => {});
+      const parentFail = run.parent_run_id
+        ? await this.env.DB.prepare(
+            "SELECT note FROM peer_reviews WHERE run_id = ? AND verdict = 'fail' ORDER BY round DESC LIMIT 1",
+          )
+            .bind(run.parent_run_id)
+            .first<{ note: string }>()
+        : null;
+      if (run.kind === "revision" && parentFail) {
+        let tie: { decision: "ship" | "halt"; note: string; tokens: number };
+        try {
+          tie = await runTiebreak(this.env, {
+            goal: run.goal,
+            firstNote: parentFail.note,
+            secondNote: review.note,
+          });
+        } catch (err) {
+          await audit(this.env, runId, "workflow", "review.tiebreak_failed", {
+            error: String(err).slice(0, 160),
+          });
+          await record("ok", null);
+          return "ok";
+        }
+        await touchRun(this.env, runId, { tokens_used: tie.tokens });
+        const halted = tie.decision === "halt";
+        await record(halted ? "halted" : "ok", null);
+        await audit(this.env, runId, "workflow", "review.tiebreak", {
+          decision: tie.decision,
+          note: tie.note,
+        });
+        return halted ? "halted" : "ok";
+      }
+      try {
+        const created = await createWorkRun(this.env, {
+          orgId: run.org_id,
+          goalId: run.goal_id,
+          goal: run.goal,
+          kind: "revision",
+          parentRunId: run.id,
+          briefNote: `Peer review failed: ${review.note}`,
+        });
+        await record("ok", created.runId);
+        await notify(this.env, run.org_id, {
+          kind: "approval.revision",
+          title: `Sent back: ${run.goal.slice(0, 80)}`,
+          body: review.note,
+        }).catch(() => {});
+      } catch (err) {
+        await record("ok", null);
+        await audit(this.env, runId, "workflow", "review.revision_blocked", {
+          error: String(err).slice(0, 160),
+        });
+        await notify(this.env, run.org_id, {
+          kind: "approval.requested",
+          title: `Review failed, revision blocked: ${run.goal.slice(0, 60)}`,
+          body: review.note,
+        }).catch(() => {});
+      }
+      return "ok";
+    }
+    if (touched.length > 0) {
+      const flagged = done
+        .filter((a) => touched.includes(a.id))
+        .map((a) => `${a.id}: ${actionLabel(a.kind)} — ${a.target.slice(0, 120)}`)
+        .join("\n");
+      try {
+        const verdict = await runMetricVerdict(this.env, {
+          goal: run.goal,
+          metric: run.metric_name ?? "(unnamed)",
+          actions: flagged,
+        });
+        await touchRun(this.env, runId, { tokens_used: verdict.tokens });
+        if (verdict.decision === "revert") {
+          await executeRevert(this.env, run.org_id, runId);
+          await notify(this.env, run.org_id, {
+            kind: "review.reverted",
+            title: `Reverted: ${run.goal.slice(0, 80)}`,
+            body: verdict.note,
+          }).catch(() => {});
+          await audit(this.env, runId, "workflow", "review.reverted", { note: verdict.note });
+        }
+      } catch (err) {
+        await audit(this.env, runId, "workflow", "review.verdict_failed", {
+          error: String(err).slice(0, 160),
+        });
+      }
+    }
+    await record("ok", null);
+    return "ok";
+  }
+
   /** Write-back never fails a run: memory loss is audited, not thrown. */
   private async memorizeBody(runId: string): Promise<void> {
     try {
@@ -1651,6 +1880,15 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
   /** The email half of a run: never fails it, never double-sends. */
   private async digestBody(runId: string): Promise<void> {
     const run = await getRun(this.env, runId);
+    // Trigger sessions spend the nightly idea budget, settled once here.
+    if (run && run.kind === "trigger" && run.tokens_used > 0) {
+      await chargeIdea(this.env, run.org_id, run.tokens_used, run.goal.slice(0, 80)).catch(
+        (err) =>
+          audit(this.env, runId, "workflow", "trigger.charge_failed", {
+            message: String(err),
+          }),
+      );
+    }
     // Sandbox samples are silent: no email, no notifications, no alerts.
     if (run && run.kind !== "sandbox") {
       try {
@@ -1735,6 +1973,9 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
 
       const acted = await step.do("act", () => this.actBody(runId));
       if (!(await this.settle(step, "settle-act", acted, runId))) return;
+
+      const reviewed = await step.do("review", () => this.reviewBody(runId));
+      if (!(await this.settle(step, "settle-review", reviewed, runId))) return;
 
       await step.do("memorize", () => this.memorizeBody(runId));
       await step.do("digest", () => this.digestBody(runId));

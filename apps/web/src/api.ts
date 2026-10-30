@@ -263,6 +263,7 @@ export interface RunDetail {
   actions: ActionRow[];
   ratings: RatingRow[];
   children: Array<{ id: string; kind: string; status: string; goal: string }>;
+  reviews: Array<{ reviewer: string; verdict: string; note: string; decision: string }>;
 }
 
 export const api = {

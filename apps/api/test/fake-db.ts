@@ -56,6 +56,11 @@ export class FakeDB {
           if (q.startsWith("SELECT * FROM runs WHERE id = ?")) {
             return (t.runs.find((r) => r.id === p[0]) as T) ?? null;
           }
+          if (q.startsWith("SELECT id FROM runs WHERE goal_id = ? AND kind = 'trigger'")) {
+            // Time is frozen in tests: any trigger run counts as cooling.
+            const r = t.runs.find((x) => x.goal_id === p[0] && x.kind === "trigger");
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT org_id FROM runs WHERE id = ?")) {
             const r = t.runs.find((x) => x.id === p[0]);
             return ((r ? { org_id: r.org_id } : null) as T) ?? null;
@@ -143,6 +148,14 @@ export class FakeDB {
           throw new Error(`FakeDB.first: unhandled: ${q.slice(0, 90)}`);
         },
         all: async <T>(): Promise<{ results: T[] }> => {
+          if (q.startsWith("SELECT lineup FROM runs WHERE goal_id = ?")) {
+            return {
+              results: t.runs
+                .filter((r) => r.goal_id === p[0] && r.status === "done")
+                .slice(-20)
+                .map((r) => ({ lineup: r.lineup })) as T[],
+            };
+          }
           if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ?")) {
             return { results: t.mcp_servers.filter((r) => r.org_id === p[0]) as T[] };
           }

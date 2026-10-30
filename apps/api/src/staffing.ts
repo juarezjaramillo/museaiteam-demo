@@ -143,7 +143,7 @@ export interface NewRunInput {
   metricTarget?: number;
   timeboxDays?: number;
   voteWindowMs?: number;
-  kind?: "work" | "revision";
+  kind?: "work" | "revision" | "trigger";
   parentRunId?: string | null;
   briefNote?: string;
 }

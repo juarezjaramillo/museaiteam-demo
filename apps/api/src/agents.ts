@@ -138,11 +138,17 @@ export interface GoalContext {
   round: number;
   memory: string[];
   playbook: string[];
+  history: string[];
 }
 
 function memoryBlock(memory: string[]): string {
   if (!memory.length) return "Org memory: (none yet)";
   return `Org memory:\n${memory.map((m, i) => `[${i + 1}] ${m}`).join("\n")}`;
+}
+
+function historyBlock(history: string[]): string {
+  if (!history.length) return "";
+  return `Earlier sessions on this goal:\n${history.map((h) => `- ${h}`).join("\n")}`;
 }
 
 export function metricLineFor(run: {
@@ -167,10 +173,13 @@ function proposalUser(ctx: GoalContext): string {
     `Round: ${ctx.round}`,
     memoryBlock(ctx.memory),
     playbookBlock(ctx.playbook),
+    historyBlock(ctx.history),
     "",
     "Propose the highest-leverage initiative from your lens.",
     'Reply JSON: {"title": "...", "body": "..."}. Body is a short Markdown plan: steps, owner roles, expected metric impact.',
-  ].join("\n");
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
 }
 
 export interface ProposalResult {
@@ -495,6 +504,80 @@ export async function runMcpStep(
     calls: res.data.calls.map((c) => ({ server: c.server, tool: c.tool, args: c.args ?? {} })),
     tokens: res.tokensUsed,
   };
+}
+
+const PeerReview = z.object({
+  verdict: z.enum(["pass", "fail"]),
+  note: z.string().max(500),
+  metricTouched: z.array(z.string().max(64)).max(10),
+});
+
+/**
+ * Peer review: a second seat re-checks shipped results against the
+ * goal before they count. Fails go back for one revision; acts that
+ * directly move the goal's metric are named for the manager.
+ */
+export async function runPeerReview(
+  env: Env,
+  input: { goal: string; decision: string; actions: string },
+): Promise<{ verdict: "pass" | "fail"; note: string; metricTouched: string[]; tokens: number }> {
+  const client = new SparkClient(env);
+  const user = [
+    `Goal: ${input.goal}`,
+    `Decision: ${input.decision}`,
+    "",
+    `Shipped results (id: what happened):\n${input.actions}`,
+    "",
+    "Re-check every result against the goal. Fail only for real misses: wrong target, broken proof, or work that fights the goal. Name the ids of acts that directly move the goal's number.",
+    'Reply JSON: {"verdict": "pass|fail", "note": "one plain sentence", "metricTouched": ["<id>"]}.',
+  ].join("\n");
+  const res = await client.chat(PeerReview, {
+    system:
+      "You are the QA lead. You verify teammates' results against the goal before they count: strict on evidence, never petty about style.",
+    user,
+    temperature: MANAGER_TEMPERATURE,
+  });
+  return { ...res.data, tokens: res.tokensUsed };
+}
+
+const MetricVerdict = z.object({
+  decision: z.enum(["keep", "revert"]),
+  note: z.string().max(500),
+});
+
+/** Manager call on acts that touch the goal's number: keep or revert. */
+export async function runMetricVerdict(
+  env: Env,
+  input: { goal: string; metric: string; actions: string },
+): Promise<{ decision: "keep" | "revert"; note: string; tokens: number }> {
+  const client = new SparkClient(env);
+  const res = await client.chat(MetricVerdict, {
+    system:
+      "You are the team manager. You rule on results that move the goal's number: keep honest progress, revert anything gamed, sloppy, or mistargeted.",
+    user: `Goal: ${input.goal}\nNumber: ${input.metric}\n\nResults:\n${input.actions}\nReply JSON: {"decision": "keep|revert", "note": "one plain sentence"}.`,
+    temperature: MANAGER_TEMPERATURE,
+  });
+  return { ...res.data, tokens: res.tokensUsed };
+}
+
+const Tiebreak = z.object({
+  decision: z.enum(["ship", "halt"]),
+  note: z.string().max(500),
+});
+
+/** Manager tiebreak after a failed revision: ship the work or stop. */
+export async function runTiebreak(
+  env: Env,
+  input: { goal: string; firstNote: string; secondNote: string },
+): Promise<{ decision: "ship" | "halt"; note: string; tokens: number }> {
+  const client = new SparkClient(env);
+  const res = await client.chat(Tiebreak, {
+    system:
+      "You are the team manager. Two reviews failed in a row; you break the tie. Ship work that helps the goal despite the flaws, halt work that does not.",
+    user: `Goal: ${input.goal}\nFirst review: ${input.firstNote}\nSecond review: ${input.secondNote}\nReply JSON: {"decision": "ship|halt", "note": "one plain sentence"}.`,
+    temperature: MANAGER_TEMPERATURE,
+  });
+  return { ...res.data, tokens: res.tokensUsed };
 }
 
 const Proposal = z.object({

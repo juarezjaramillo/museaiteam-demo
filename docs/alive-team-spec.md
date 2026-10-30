@@ -135,3 +135,26 @@ hardcoded default until §6 lands).
 
 Non-goals: per-org naming, email commands, voice/phone, auto-start of
 money acts (never — human always), retros on empty weeks.
+
+## §8 Proactive ownership + peer review (shipped round 2)
+
+Interview-settled. Each hire owns its goal's number; every result is
+peer-checked before it counts.
+
+- Ownership (`checks.ts evaluateOwnership`, shared `triggers.ts`): on
+  every scheduled check, before the manager's judgment. Fixed rule —
+  10%+ off the trailing median, or flat 5 points over 48h+. Fewer
+  than 3 points (or a 14-day-quiet feed) flags `metric.gap` and waits;
+  never acts blind. Manual-schedule goals never trigger (no rhythm).
+- Fire → review-after goals start a `trigger` session (idea budget,
+  24h cooldown, brief carries provenance); check-first goals get a
+  next-work proposal. Cron already runs checks before ideas, so
+  metrics spend first by order.
+- Peer review (workflow `review` step, `peer_reviews` table): a second
+  seat (QA unless she authored) passes/fails results. Fail → one
+  revision + feedback writeback; failed revision → manager tiebreak
+  (ship/halt). Acts touching the goal's number → manager keep/revert
+  (revert runs the standard undo). Retry-safe via the recorded round.
+- Richer context: runs get the goal's last 3 session outcomes on top
+  of memory/playbook/corrections. Full reversible-free autonomy from
+  day one; undoable ships even when visible.

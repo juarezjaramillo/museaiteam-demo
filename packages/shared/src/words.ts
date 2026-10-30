@@ -29,6 +29,7 @@ const KIND_WORDS: Record<string, string> = {
   revision: "Revision",
   propose: "Proposal",
   sandbox: "Sample",
+  trigger: "Triggered session",
 };
 
 export function kindLabel(kind: string): string {
@@ -135,6 +136,7 @@ const EVENT_WORDS: Record<string, string> = {
   "check.monitoring": "Check-in",
   "check.triggered": "Check-in",
   "check.blocked": "Check-in blocked",
+  "metric.gap": "Needs numbers",
   "check.failed": "Check-in failed",
   "goal.created": "Goal created",
   "goal.overdue": "Overdue",
@@ -172,6 +174,9 @@ const NOTICE_WORDS: Record<string, string> = {
   "digest.weekly": "Weekly retro",
   "slack.dm_fallback": "Team message",
   "error.spike": "Something broke",
+  "trigger.fired": "Metric moved",
+  "metric.gap": "Metric needs numbers",
+  "review.reverted": "Result reverted",
   "billing.past_due": "Payment failed",
   "billing.canceling": "Subscription ending",
 };

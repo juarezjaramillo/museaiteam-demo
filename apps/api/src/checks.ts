@@ -1,12 +1,17 @@
 import {
+  TRIGGER_MIN_POINTS,
+  crewName,
+  evaluateTrigger,
   isGoalDue,
   isOverdue,
+  isTriggerStale,
   lastTickBefore,
   trialStatus,
   type TrialRow,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { runCheckDecide } from "./agents.js";
+import { ideaBudget } from "./allowance.js";
 import { maybeSendFairUseAlert } from "./billing.js";
 import { audit } from "./db.js";
 import {
@@ -33,10 +38,184 @@ interface DueGoal {
   metric_source: string | null;
   metric_baseline: number | null;
   metric_target: number | null;
+  approval_mode: string | null;
   deadline: string | null;
   schedule: string;
   status: string;
   last_check_at: string | null;
+}
+
+/**
+ * The owner seat for a goal: the role that worked it most, so
+ * ownership is stable without a knob. Goals with no history belong
+ * to the manager, who digs in personally.
+ */
+export async function deriveOwner(env: Env, goalId: string): Promise<string> {
+  const rows = await env.DB.prepare(
+    "SELECT lineup FROM runs WHERE goal_id = ? AND status = 'done' ORDER BY rowid DESC LIMIT 20",
+  )
+    .bind(goalId)
+    .all<{ lineup: string }>();
+  const tally = new Map<string, number>();
+  for (const r of rows.results ?? []) {
+    try {
+      const lineup = JSON.parse(r.lineup) as unknown;
+      if (!Array.isArray(lineup)) continue;
+      for (const role of lineup) {
+        if (typeof role !== "string") continue;
+        tally.set(role, (tally.get(role) ?? 0) + 1);
+      }
+    } catch {
+      /* ignore malformed lineups */
+    }
+  }
+  let best = "manager";
+  let bestN = 0;
+  for (const [role, n] of tally) {
+    if (n > bestN) {
+      best = role;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/** A goal rests 24h after a trigger session before firing again. */
+export async function triggerCoolingDown(env: Env, goalId: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT id FROM runs WHERE goal_id = ? AND kind = 'trigger'
+     AND datetime(created_at) > datetime('now', '-24 hours') LIMIT 1`,
+  )
+    .bind(goalId)
+    .first<{ id: string }>();
+  return !!row;
+}
+
+/**
+ * Ownership, evaluated on every scheduled check before the manager's
+ * judgment. No numbers → flag the gap and wait (never act blind).
+ * Fixed-rule fire → the owner digs in: review-after goals start a
+ * trigger session on the idea budget, check-first goals get a
+ * proposal. Anything else falls through to the manager check-in.
+ */
+async function evaluateOwnership(
+  env: Env,
+  goal: DueGoal,
+  series: Array<{ ts: string; value: number; source: string }>,
+  checkRunId: string,
+): Promise<"handled" | "fallthrough"> {
+  const gap =
+    series.length < TRIGGER_MIN_POINTS
+      ? "no numbers yet — record a few (or connect the source) so the owner hire can watch this goal"
+      : isTriggerStale(series, Date.now())
+        ? "the number feed went quiet over 14 days ago"
+        : null;
+  if (gap) {
+    const flagged = await env.DB.prepare(
+      `SELECT id FROM goal_events WHERE goal_id = ? AND kind = 'metric.gap'
+       AND datetime(created_at) > datetime('now', '-7 days') LIMIT 1`,
+    )
+      .bind(goal.id)
+      .first<{ id: string }>();
+    if (!flagged) {
+      await addEvent(env, goal.id, "metric.gap", "Metric needs numbers", { runId: checkRunId });
+      await notify(env, goal.org_id, {
+        kind: "metric.gap",
+        title: `Metric needs numbers: ${goal.title}`.slice(0, 120),
+        body: gap,
+        link: `goal:${goal.id}:metric-gap`,
+      });
+    }
+    await addEvent(env, goal.id, "check.monitoring", "Waiting on numbers", {
+      runId: checkRunId,
+    });
+    return "handled";
+  }
+  const verdict = evaluateTrigger(series);
+  if (!verdict.fired) return "fallthrough";
+  if (await triggerCoolingDown(env, goal.id)) {
+    await audit(env, checkRunId, "system", "trigger.cooldown", { goal: goal.id });
+    return "fallthrough";
+  }
+  const budget = await ideaBudget(env, goal.org_id);
+  if (budget.left <= 0) {
+    await addEvent(env, goal.id, "check.blocked", `Metric moved but ideas budget spent`, {
+      runId: checkRunId,
+      reason: verdict.reason,
+    });
+    return "handled";
+  }
+  const owner = await deriveOwner(env, goal.id);
+  const brief =
+    `Metric trigger: ${goal.metric_name ?? "the number"} ${verdict.reason}. ` +
+    `Owner: ${owner}. Dig in within this session; a bigger dig becomes a proposal.`;
+  if (goal.approval_mode !== "posthoc") {
+    const open = await env.DB.prepare(
+      `SELECT id FROM proposals_out WHERE goal_id = ?
+       AND status IN ('proposed', 'reminded') LIMIT 1`,
+    )
+      .bind(goal.id)
+      .first<{ id: string }>();
+    if (!open) {
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO proposals_out (id, org_id, kind, goal_id, title, body, status, remind_at, start_at)
+         VALUES (?, ?, 'next-work', ?, ?, ?, 'proposed', datetime('now', '+1 day'), datetime('now', '+3 days'))`,
+      )
+        .bind(
+          id,
+          goal.org_id,
+          goal.id,
+          `Metric moved: ${goal.title}`.slice(0, 140),
+          brief.slice(0, 1000),
+        )
+        .run();
+      await notify(env, goal.org_id, {
+        kind: "proposal.proposed",
+        title: `Metric moved: ${goal.title}`.slice(0, 120),
+        body: `${verdict.reason}. The goal needs check-first, so this waits for you.`,
+        link: `proposal:${id}`,
+      });
+    }
+    await addEvent(env, goal.id, "check.triggered", brief, {
+      runId: checkRunId,
+      owner,
+      proposed: true,
+    });
+    return "handled";
+  }
+  try {
+    const created = await createWorkRun(env, {
+      orgId: goal.org_id,
+      goalId: goal.id,
+      goal: goal.title,
+      metricName: goal.metric_name ?? undefined,
+      metricBaseline: goal.metric_baseline ?? undefined,
+      metricTarget: goal.metric_target ?? undefined,
+      kind: "trigger",
+      briefNote: brief,
+    });
+    await addEvent(env, goal.id, "check.triggered", brief, {
+      runId: created.runId,
+      owner,
+      queued: created.status === "queued",
+    });
+    await notify(env, goal.org_id, {
+      kind: "trigger.fired",
+      title: `Metric moved: ${goal.title}`.slice(0, 120),
+      body: `${verdict.reason}. ${crewName(owner)} is digging in.`,
+    });
+    return "handled";
+  } catch (err) {
+    const reason =
+      err instanceof RunThrottled
+        ? "fair-use throttled"
+        : err instanceof RunConflict
+          ? String(err).slice(0, 120)
+          : `failed: ${String(err).slice(0, 120)}`;
+    await addEvent(env, goal.id, "check.blocked", brief, { runId: checkRunId, reason });
+    return "handled";
+  }
 }
 
 async function trialExpired(env: Env, orgId: string): Promise<boolean> {
@@ -103,6 +282,15 @@ export async function runCheck(env: Env, goal: DueGoal): Promise<void> {
       /* metric is best-effort; the check still runs */
     }
     const series = await metricSeries(env, goal.id);
+    // Ownership first: gaps and fires are handled without spending a
+    // manager call; anything quieter falls through to judgment.
+    if ((await evaluateOwnership(env, goal, series, runId)) === "handled") {
+      await env.DB.prepare("UPDATE runs SET status = 'done' WHERE id = ?")
+        .bind(runId)
+        .run();
+      await maybeSendFairUseAlert(env, goal.org_id).catch(() => {});
+      return;
+    }
     const latest = series.length > 0 ? series[series.length - 1] : null;
     const metricLine = [
       goal.metric_name ? `metric: ${goal.metric_name}` : "metric: (none set)",
@@ -171,7 +359,8 @@ export async function tickGoals(env: Env): Promise<void> {
   const now = Date.now();
   const rows = await env.DB.prepare(
     `SELECT id, org_id, team_id, title, metric_name, metric_source,
-      metric_baseline, metric_target, deadline, schedule, status, last_check_at
+      metric_baseline, metric_target, approval_mode, deadline, schedule,
+      status, last_check_at
      FROM goals WHERE status IN ('active', 'overdue') AND schedule != 'manual'`,
   ).all<DueGoal>();
   for (const goal of rows.results ?? []) {
