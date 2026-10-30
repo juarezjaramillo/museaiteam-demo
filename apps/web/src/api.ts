@@ -1,4 +1,8 @@
-export const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+/** API origin. Defaults to production so a build can never ship
+ *  pointing at the Pages SPA fallback (every /api/* silently 200s
+ *  index.html there). Override per-environment with VITE_API_BASE. */
+export const API_BASE =
+  import.meta.env.VITE_API_BASE ?? "https://museaiteam-api.juarezjaramillo.workers.dev";
 
 export interface RunRow {
   id: string;
