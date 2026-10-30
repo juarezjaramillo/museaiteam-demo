@@ -6,6 +6,8 @@ import {
   hireToken,
   listSeatCredentials,
   seatForRole,
+  seatReadyForServer,
+  seatSession,
   setSeatCredential,
   unbindSeatTool,
   wipeSeatCredentials,
@@ -91,5 +93,27 @@ describe("seat credentials", () => {
     expect(await serverSecretForSeat(e, server, "s-eng")).toBeNull();
     await setSeatCredential(e, "org1", "s-eng", { tool: "mcp:a", kind: "token", secret: "seat-key" });
     expect(await serverSecretForSeat(e, server, "s-eng")).toBe("seat-key");
+  });
+
+  it("vaults expiring sessions and rejects past expiry", async () => {
+    const { env: e } = env();
+    await expect(
+      setSeatCredential(e, "org1", "s-eng", { tool: "figma", kind: "session", secret: "s", expiresAtMs: Date.now() - 1000 }),
+    ).rejects.toThrow(/future/);
+    await setSeatCredential(e, "org1", "s-eng", { tool: "figma", kind: "session", secret: "s", expiresAtMs: Date.now() + 3600_000 });
+    expect(await seatSession(e, "org1", "s-eng", "figma")).toBe("s");
+    expect(await seatSession(e, "org1", "s-eng", "missing")).toBeNull();
+    const listed = await listSeatCredentials(e, "org1", "s-eng");
+    expect(listed.find((c) => c.tool === "figma")?.expires_at).toBeTruthy();
+  });
+
+  it("reroutes bound-but-seatless servers, leaves org path alone", async () => {
+    const { env: e, tables } = env();
+    tables.mcp_servers.push({ id: "a", org_id: "org1", name: "A", url: "https://a/mcp", auth: "header", auth_name: "", source: "catalog", status: "trusted", spend_cap_cents: 0 });
+    expect(await seatReadyForServer(e, "org1", "s-eng", "a")).toBe(true);
+    await bindSeatTool(e, "org1", "s-eng", "a");
+    expect(await seatReadyForServer(e, "org1", "s-eng", "a")).toBe(false);
+    await setSeatCredential(e, "org1", "s-eng", { tool: "mcp:a", kind: "token", secret: "k" });
+    expect(await seatReadyForServer(e, "org1", "s-eng", "a")).toBe(true);
   });
 });

@@ -304,9 +304,15 @@ export const api = {
       body: JSON.stringify({ decision, note }),
     }),
   getConnections: (org: string) =>
-    req<{ status: Record<string, "connected" | "expired" | "missing"> }>(
-      `/api/orgs/${org}/connections`,
-    ).then((r) => r.status),
+    req<{
+      status: Record<string, "connected" | "expired" | "missing">;
+      cutOver: boolean;
+      retiring: Record<string, string>;
+    }>(`/api/orgs/${org}/connections`).then((r) => ({
+      status: r.status,
+      cutOver: r.cutOver,
+      retiring: r.retiring ?? {},
+    })),
   me: () =>
     req<{ user: { id: string; email?: string }; orgId: string }>(`/api/me`),
   signInUrl: () => `${API_BASE}/api/auth/signin`,
@@ -332,6 +338,53 @@ export const api = {
     req<{ ok: boolean }>(`/api/orgs/${org}/seats/${seatId}/approve`, {
       method: "POST",
     }),
+  getTeamSeats: (org: string) =>
+    req<{
+      seats: Array<{
+        id: string;
+        role: string;
+        email: string | null;
+        approved: boolean;
+        keystone: string | null;
+        keystoneReady: boolean;
+        sessionOne: boolean;
+        on: string[];
+        waiting: Array<{ tool: string; step: string; status: string; detail: string }>;
+        box: string;
+        spend: { seconds: number; cents: number } | null;
+      }>;
+      meanwhile: string[];
+    }>(`/api/orgs/${org}/team/seats`),
+  wakeBox: (org: string, seatId: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/seats/${seatId}/box/wake`, {
+      method: "POST",
+    }),
+  saveSeatSession: (org: string, seatId: string, tool: string, secret: string, daysValid: number) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/seats/${seatId}/credentials`, {
+      method: "PUT",
+      body: JSON.stringify({
+        tool,
+        kind: "session",
+        secret,
+        expiresAtMs: Date.now() + daysValid * 86_400_000,
+      }),
+    }),
+  fireSeat: (org: string, seatId: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/seats/${seatId}`, {
+      method: "DELETE",
+    }),
+  getCutover: (org: string) =>
+    req<{ cutOver: boolean; providers: string[]; servers: string[]; kept: string[] }>(
+      `/api/orgs/${org}/cutover`,
+    ),
+  migrateCutover: (org: string) =>
+    req<{
+      checklist: Array<{ seatId: string; requestId?: string; tools?: string[]; error?: string }>;
+      retired: string[];
+      status: { cutOver: boolean; providers: string[]; servers: string[]; kept: string[] };
+    }>(`/api/orgs/${org}/cutover/migrate`, { method: "POST" }),
+  flipCutover: (org: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/cutover/flip`, { method: "POST" }),
   getBilling: (org: string) =>
     req<{
       subscribed: boolean;

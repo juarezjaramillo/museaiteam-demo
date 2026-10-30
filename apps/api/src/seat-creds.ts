@@ -5,7 +5,7 @@ import {
   ownerFor,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
-import { audit } from "./db.js";
+import { audit, orgCutOver } from "./db.js";
 import { loadToken, type Provider } from "./oauth.js";
 import { getSeat } from "./seat-mail.js";
 
@@ -17,6 +17,12 @@ export interface SeatCred {
   login_user: string;
   status: string;
   updated_at: string;
+  expires_at: string | null;
+}
+
+/** Epoch millis → UTC `YYYY-MM-DD HH:MM:SS`, the column's one format. */
+export function expiresIso(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 }
 
 /**
@@ -29,19 +35,22 @@ export async function setSeatCredential(
   env: Env,
   orgId: string,
   seatId: string,
-  input: { tool: string; kind: SeatCredKind; secret: string; loginUser?: string },
+  input: { tool: string; kind: SeatCredKind; secret: string; loginUser?: string; expiresAtMs?: number; refreshToken?: string | null },
 ): Promise<void> {
   const seat = await getSeat(env, orgId, seatId);
   if (!seat) throw new Error("seat not found");
+  if (input.expiresAtMs !== undefined && !(input.expiresAtMs > Date.now())) {
+    throw new Error("expiry must be in the future");
+  }
   const key = keyFromHex(env.TOKEN_ENC_KEY);
   await env.DB.prepare(
     `INSERT INTO seat_credentials (id, org_id, seat_id, tool, kind, login_user,
-       secret_enc, status, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', datetime('now'))
+       secret_enc, refresh_token_enc, expires_at, status, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok', datetime('now'))
      ON CONFLICT(seat_id, tool) DO UPDATE SET
        kind = excluded.kind, login_user = excluded.login_user,
-       secret_enc = excluded.secret_enc, status = 'ok',
-       updated_at = datetime('now')`,
+       secret_enc = excluded.secret_enc, refresh_token_enc = excluded.refresh_token_enc,
+       expires_at = excluded.expires_at, status = 'ok', updated_at = datetime('now')`,
   )
     .bind(
       crypto.randomUUID(),
@@ -51,6 +60,8 @@ export async function setSeatCredential(
       input.kind,
       (input.loginUser ?? "").slice(0, 200),
       await encryptToB64(key, input.secret),
+      input.refreshToken ? await encryptToB64(key, input.refreshToken) : null,
+      input.expiresAtMs === undefined ? null : expiresIso(input.expiresAtMs),
     )
     .run();
   await audit(env, null, "human", "seat.cred_saved", { org: orgId, seat: seatId, tool: input.tool });
@@ -89,11 +100,71 @@ export async function listSeatCredentials(env: Env, orgId: string, seatId: strin
   const seat = await getSeat(env, orgId, seatId);
   if (!seat) return [];
   const rows = await env.DB.prepare(
-    "SELECT tool, kind, login_user, status, updated_at FROM seat_credentials WHERE seat_id = ? ORDER BY tool",
+    "SELECT tool, kind, login_user, status, updated_at, expires_at FROM seat_credentials WHERE seat_id = ? ORDER BY tool",
   )
     .bind(seatId)
     .all<SeatCred>();
   return rows.results ?? [];
+}
+
+/**
+ * A vaulted browser session: the secret, or null when missing, expired,
+ * or unreadable. Null is the re-relay trigger — the hire asks for a
+ * fresh session instead of failing mid-task.
+ */
+export async function seatSession(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  tool: string,
+): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT secret_enc, expires_at, status FROM seat_credentials WHERE org_id = ? AND seat_id = ? AND tool = ? AND kind = 'session'",
+  )
+    .bind(orgId, seatId, tool)
+    .first<{ secret_enc: string; expires_at: string | null; status: string }>();
+  if (!row || row.status !== "ok") return null;
+  if (row.expires_at && row.expires_at <= expiresIso(Date.now())) return null;
+  try {
+    return await decryptSeatSecret(env, orgId, seatId, row);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The vendor deleted the seat (or its key) out from under us: flip the
+ * vaulted login ok → lost exactly once. True means newly lost — the
+ * caller raises the seat.lost task; false means already known.
+ */
+export async function markSeatLost(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  tool: string,
+): Promise<boolean> {
+  const res = await env.DB.prepare(
+    "UPDATE seat_credentials SET status = 'lost', updated_at = datetime('now') WHERE org_id = ? AND seat_id = ? AND tool = ? AND status = 'ok'",
+  )
+    .bind(orgId, seatId, tool)
+    .run();
+  return (res.meta.changes ?? 0) === 1;
+}
+
+/**
+ * Reroute check: unbound servers ride the org path (ready); bound
+ * servers need the hire's own credential or the call skips — the hire
+ * does other work meanwhile instead of failing.
+ */
+export async function seatReadyForServer(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  serverId: string,
+): Promise<boolean> {
+  const bound = await seatToolIds(env, seatId);
+  if (!bound.includes(serverId)) return true;
+  return (await seatToken(env, orgId, seatId, `mcp:${serverId}`)) !== null;
 }
 
 async function decryptSeatSecret(
@@ -174,6 +245,7 @@ export async function hireToken(
       if (token) return token;
     }
   }
+  if (await orgCutOver(env, orgId)) return null;
   return loadToken(env, orgId, provider);
 }
 

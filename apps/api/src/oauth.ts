@@ -10,6 +10,7 @@ import {
   type ProviderId,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
+import { OrgRetired, orgCutOver } from "./db.js";
 import { authTest } from "./integrations/slack.js";
 
 export type Provider = ProviderId;
@@ -59,6 +60,7 @@ export async function connectUrl(
   org: string,
   base: string,
   shop?: string,
+  seat?: string,
 ): Promise<string> {
   const { id } = appCreds(env, provider);
   if (!id) throw new ProviderNotConfigured(provider);
@@ -67,7 +69,7 @@ export async function connectUrl(
   if (provider === "shopify" && !store) {
     throw new Error("shopify connect needs ?shop=your-store.myshopify.com");
   }
-  const state = await signState(env.AUTH_SECRET, org, 600, store ?? undefined);
+  const state = await signState(env.AUTH_SECRET, org, 600, store ?? undefined, seat);
   const redirect = callbackUrl(base, provider);
   if (provider === "github") {
     // Least privilege: public repos only. The demo repo is public, so the
@@ -133,7 +135,7 @@ export async function connectUrl(
   return `https://api.notion.com/v1/oauth/authorize?${q}`;
 }
 
-interface TokenSet {
+export interface TokenSet {
   access: string;
   refresh: string | null;
   expiresAt: string | null;
@@ -146,7 +148,7 @@ function expiresAtFrom(json: { expires_in?: unknown }): string | null {
     : null;
 }
 
-async function exchange(
+export async function exchangeCode(
   env: Env,
   provider: Provider,
   code: string,
@@ -323,6 +325,9 @@ export async function storeToken(
   provider: Provider,
   tokens: TokenSet,
 ): Promise<void> {
+  if (await orgCutOver(env, orgId)) {
+    throw new OrgRetired(`${provider} is retired here — connect it as the hire instead`);
+  }
   const key = keyFromHex(env.TOKEN_ENC_KEY);
   await env.DB.prepare(
     `INSERT INTO oauth_tokens (org_id, provider, access_token_enc,
@@ -520,7 +525,7 @@ export async function finishConnect(
   if (providerNeedsShop(provider) && !shop) {
     throw new Error(`${provider} connect is missing its store domain`);
   }
-  const tokens = await exchange(
+  const tokens = await exchangeCode(
     env,
     provider,
     code,

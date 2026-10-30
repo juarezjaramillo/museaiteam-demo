@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { crewName, CREW, ownerFor } from "../src/crew.ts";
+import { crewName, CREW, hireDisplayName, ownerFor } from "../src/crew.ts";
 import { buildProof } from "../src/proof.ts";
 import { actionLabel } from "../src/words.ts";
 const proof = (kind, target, status, rp, p) =>
@@ -12,6 +12,11 @@ test("every seat and the manager has a name", () => {
     assert.equal(crewName(role), CREW[role]);
   }
   assert.equal(crewName("mystery"), "mystery");
+});
+
+test("hire display names carry the AI tag", () => {
+  assert.equal(hireDisplayName("analyst"), "Priya (AI)");
+  assert.equal(hireDisplayName("mystery"), "mystery (AI)");
 });
 
 test("action kinds map to the seat whose limits authorized them", () => {

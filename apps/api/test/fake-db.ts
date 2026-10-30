@@ -31,6 +31,7 @@ export interface FakeTables {
   tool_admin_grants: Row[];
   box_state: Row[];
   box_runs: Row[];
+  seat_milestones: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -59,6 +60,7 @@ export function blankTables(): FakeTables {
     tool_admin_grants: [],
     box_state: [],
     box_runs: [],
+    seat_milestones: [],
   };
 }
 
@@ -170,10 +172,14 @@ export class FakeDB {
             const team = s ? t.teams.find((x) => x.id === s.team_id && x.org_id === p[1]) : null;
             return ((s && team ? s : null) as T) ?? null;
           }
-          if (q.startsWith("SELECT s.id, t.org_id FROM seats s JOIN teams t")) {
+          if (q.startsWith("SELECT milestone FROM seat_milestones WHERE seat_id = ?")) {
+            const r = t.seat_milestones.find((x) => x.seat_id === p[0] && x.milestone === "session_one");
+            return ((r ? { milestone: r.milestone } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT s.id, s.frozen_at, t.org_id FROM seats s JOIN teams t")) {
             const s = t.seats.find((x) => x.email === p[0]);
             const team = s ? t.teams.find((x) => x.id === s.team_id) : null;
-            return ((s && team ? { id: s.id, org_id: team.org_id } : null) as T) ?? null;
+            return ((s && team ? { id: s.id, frozen_at: s.frozen_at ?? null, org_id: team.org_id } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT id FROM seats WHERE team_id = ? AND role = ? AND approved = 1")) {
             const r = t.seats.find((x) => x.team_id === p[0] && x.role === p[1] && x.approved === 1);
@@ -184,6 +190,16 @@ export class FakeDB {
               (x) => x.org_id === p[0] && x.seat_id === p[1] && x.tool === p[2],
             );
             return ((r ? { secret_enc: r.secret_enc, kind: r.kind, status: r.status } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT secret_enc, expires_at, status FROM seat_credentials")) {
+            const r = t.seat_credentials.find(
+              (x) => x.org_id === p[0] && x.seat_id === p[1] && x.tool === p[2] && x.kind === "session",
+            );
+            return ((r ? { secret_enc: r.secret_enc, expires_at: r.expires_at ?? null, status: r.status } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id FROM seat_requests WHERE seat_id = ? AND status = 'proposed'")) {
+            const r = t.seat_requests.find((x) => x.seat_id === p[0] && x.status === "proposed");
+            return ((r ? { id: r.id } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT tools_json FROM org_seat_map WHERE org_id = ? AND role = ?")) {
             const r = t.org_seat_map.find((x) => x.org_id === p[0] && x.role === p[1]);
@@ -204,6 +220,36 @@ export class FakeDB {
           if (q.startsWith("SELECT secret_enc FROM tool_admin_grants WHERE org_id = ? AND tool = ?")) {
             const r = t.tool_admin_grants.find((x) => x.org_id === p[0] && x.tool === p[1] && x.status === "granted");
             return ((r ? { secret_enc: r.secret_enc } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT trial_started_at, trial_ends_at, grace_used, subscribed")) {
+            const r = t.orgs.find((x) => x.id === p[0]);
+            if (!r) return (null as T) ?? null;
+            const now = Date.now();
+            return {
+              trial_started_at: r.trial_started_at ?? now,
+              trial_ends_at: r.trial_ends_at ?? now + 14 * 86_400_000,
+              grace_used: r.grace_used ?? 0,
+              subscribed: r.subscribed ?? 0,
+            } as T;
+          }
+          if (q.startsWith("SELECT provider FROM oauth_tokens WHERE org_id = ? AND provider = ?")) {
+            const r = t.oauth_tokens.find((x) => x.org_id === p[0] && x.provider === p[1]);
+            return ((r ? { provider: r.provider } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT server_id FROM mcp_credentials WHERE org_id = ? AND server_id = ?")) {
+            const r = t.mcp_credentials.find((x) => x.org_id === p[0] && x.server_id === p[1]);
+            return ((r ? { server_id: r.server_id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT config FROM provider_config WHERE org_id = ? AND provider = ?")) {
+            return (null as T) ?? null;
+          }
+          if (q.startsWith("SELECT seat_cutover FROM orgs WHERE id = ?")) {
+            const r = t.orgs.find((x) => x.id === p[0]);
+            return ((r ? { seat_cutover: r.seat_cutover ?? 0 } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id FROM teams WHERE id = ? AND org_id = ?")) {
+            const r = t.teams.find((x) => x.id === p[0] && x.org_id === p[1]);
+            return ((r ? { id: r.id } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT box_max_concurrent FROM orgs WHERE id = ?")) {
             const r = t.orgs.find((x) => x.id === p[0]);
@@ -242,6 +288,24 @@ export class FakeDB {
                 .map((r) => ({ lineup: r.lineup })) as T[],
             };
           }
+          if (q.startsWith("SELECT r.id, r.org_id, r.tools_json, s.role FROM seat_requests r")) {
+            const out: Row[] = [];
+            for (const r of t.seat_requests) {
+              if (r.status !== "proposed" || !(r.created_at < p[0])) continue;
+              if (r.nudged_at != null && !(r.nudged_at < p[1])) continue;
+              const s = t.seats.find((x) => x.id === r.seat_id);
+              if (!s) continue;
+              out.push({ id: r.id, org_id: r.org_id, tools_json: r.tools_json, role: s.role });
+            }
+            return { results: out.slice(0, 50) as T[] };
+          }
+          if (q.startsWith("SELECT tool, status FROM seat_provisions WHERE seat_id = ? AND status != 'verified'")) {
+            return {
+              results: t.seat_provisions
+                .filter((r) => r.seat_id === p[0] && r.status !== "verified")
+                .map((r) => ({ tool: r.tool, status: r.status })) as T[],
+            };
+          }
           if (q.startsWith("SELECT tool FROM seat_provisions WHERE seat_id = ? AND status = 'verified'")) {
             return { results: t.seat_provisions.filter((r) => r.seat_id === p[0] && r.status === "verified").map((r) => ({ tool: r.tool })) as T[] };
           }
@@ -250,8 +314,9 @@ export class FakeDB {
             for (const pr of t.seat_provisions) {
               if (pr.status !== "pending" && pr.status !== "waiting") continue;
               const s = t.seats.find((x) => x.id === pr.seat_id);
+              if (!s || s.frozen_at) continue;
               const team = s ? t.teams.find((x) => x.id === s.team_id) : null;
-              if (!s || !team) continue;
+              if (!team) continue;
               out.push({ seat_id: pr.seat_id, tool: pr.tool, step: pr.step, status: pr.status, attempts: pr.attempts ?? 0, org_id: team.org_id, email: s.email ?? null, role: s.role });
             }
             return { results: out.slice(0, 50) as T[] };
@@ -276,10 +341,59 @@ export class FakeDB {
             }
             return { results: out as T[] };
           }
+          if (q.startsWith("SELECT s.id, s.role, s.email, s.approved FROM seats s")) {
+            const out: Row[] = [];
+            for (const s of t.seats) {
+              const team = t.teams.find((x) => x.id === s.team_id);
+              if (!team || team.org_id !== p[0]) continue;
+              out.push({ id: s.id, role: s.role, email: s.email ?? null, approved: s.approved ?? 0 });
+            }
+            return { results: out as T[] };
+          }
+          if (q.startsWith("SELECT tool, step, status, detail FROM seat_provisions WHERE seat_id = ?")) {
+            return {
+              results: t.seat_provisions.filter((r) => r.seat_id === p[0]).map((r) => ({
+                tool: r.tool, step: r.step, status: r.status, detail: r.detail ?? "",
+              })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT a.payload FROM actions a JOIN runs r")) {
+            const out: Row[] = [];
+            for (const a of t.actions) {
+              if (a.status !== "skipped" || !String(a.payload ?? "").includes("seatless")) continue;
+              const run = t.runs.find((x) => x.id === a.run_id);
+              if (!run || run.org_id !== p[0]) continue;
+              out.push({ payload: a.payload });
+            }
+            return { results: out.slice(-5).reverse() as T[] };
+          }
+          if (q.startsWith("SELECT provider FROM oauth_tokens WHERE org_id = ?")) {
+            return { results: t.oauth_tokens.filter((x) => x.org_id === p[0]).map((x) => ({ provider: x.provider })) as T[] };
+          }
+          if (q.startsWith("SELECT server_id FROM mcp_credentials WHERE org_id = ?")) {
+            return { results: t.mcp_credentials.filter((x) => x.org_id === p[0]).map((x) => ({ server_id: x.server_id })) as T[] };
+          }
+          if (q.startsWith("SELECT seat_id FROM seat_tools WHERE mcp_server_id = ?")) {
+            return { results: t.seat_tools.filter((x) => x.mcp_server_id === p[0]).map((x) => ({ seat_id: x.seat_id })) as T[] };
+          }
+          if (q.startsWith("SELECT p.seat_id, p.status FROM seat_provisions p JOIN seats s")) {
+            const out: Row[] = [];
+            for (const pr of t.seat_provisions) {
+              if (pr.tool !== p[1]) continue;
+              const s = t.seats.find((x) => x.id === pr.seat_id);
+              const team = s ? t.teams.find((x) => x.id === s.team_id) : null;
+              if (!s || !team || team.org_id !== p[0]) continue;
+              out.push({ seat_id: pr.seat_id, status: pr.status });
+            }
+            return { results: out as T[] };
+          }
+          if (q.startsWith("SELECT id FROM seats WHERE frozen_at IS NOT NULL")) {
+            return { results: t.seats.filter((x) => x.frozen_at).map((x) => ({ id: x.id })) as T[] };
+          }
           if (q.startsWith("SELECT mcp_server_id FROM seat_tools WHERE seat_id = ?")) {
             return { results: t.seat_tools.filter((r) => r.seat_id === p[0]) as T[] };
           }
-          if (q.startsWith("SELECT tool, kind, login_user, status, updated_at FROM seat_credentials")) {
+          if (q.startsWith("SELECT tool, kind, login_user, status, updated_at, expires_at FROM seat_credentials")) {
             return { results: t.seat_credentials.filter((r) => r.seat_id === p[0]) as T[] };
           }
           if (q.startsWith("SELECT id, from_addr, subject, substr(body, 1, 2000) AS body, read_at, created_at FROM seat_mail")) {
@@ -452,6 +566,49 @@ export class FakeDB {
             );
             return { meta: { changes: 1 } };
           }
+          if (q.startsWith("DELETE FROM oauth_tokens WHERE org_id = ? AND provider = ?")) {
+            const n = t.oauth_tokens.length;
+            t.oauth_tokens = t.oauth_tokens.filter((x) => !(x.org_id === p[0] && x.provider === p[1]));
+            return { meta: { changes: n - t.oauth_tokens.length } };
+          }
+          if (q.startsWith("UPDATE orgs SET seat_cutover = 1")) {
+            const r = t.orgs.find((x) => x.id === p[0]);
+            if (r) r.seat_cutover = 1;
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seats SET hired = 0, approved = 0, frozen_at = datetime('now')")) {
+            const r = t.seats.find((x) => x.id === p[0]);
+            if (r) {
+              r.hired = 0;
+              r.approved = 0;
+              r.frozen_at = "2020-01-01 00:00:00";
+            }
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM seat_credentials WHERE seat_id = ?")) {
+            t.seat_credentials = t.seat_credentials.filter((x) => x.seat_id !== p[0]);
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM seat_mail WHERE seat_id = ?")) {
+            t.seat_mail = t.seat_mail.filter((x) => x.seat_id !== p[0]);
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM seat_provisions WHERE seat_id = ?")) {
+            t.seat_provisions = t.seat_provisions.filter((x) => x.seat_id !== p[0]);
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM seat_requests WHERE seat_id = ?")) {
+            t.seat_requests = t.seat_requests.filter((x) => x.seat_id !== p[0]);
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM box_runs WHERE seat_id = ?")) {
+            t.box_runs = t.box_runs.filter((x) => x.seat_id !== p[0]);
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM seats WHERE id = ?")) {
+            t.seats = t.seats.filter((x) => x.id !== p[0]);
+            return { meta: { changes: 1 } };
+          }
           if (q.startsWith("DELETE FROM mcp_servers")) {
             const n = t.mcp_servers.length;
             t.mcp_servers = t.mcp_servers.filter((x) => !(x.org_id === p[0] && x.id === p[1]));
@@ -521,11 +678,19 @@ export class FakeDB {
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO seat_credentials")) {
-            const [id, org_id, seat_id, tool, kind, login_user, secret_enc] = p as string[];
+            const [id, org_id, seat_id, tool, kind, login_user, secret_enc, refresh_token_enc, expires_at] = p as (string | null)[];
             t.seat_credentials = t.seat_credentials.filter(
               (x) => !(x.seat_id === seat_id && x.tool === tool),
             );
-            t.seat_credentials.push({ id, org_id, seat_id, tool, kind, login_user, secret_enc, status: "ok" });
+            t.seat_credentials.push({ id, org_id, seat_id, tool, kind, login_user, secret_enc, refresh_token_enc: refresh_token_enc ?? null, expires_at: expires_at ?? null, status: "ok" });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seat_credentials SET status = 'lost'")) {
+            const r = t.seat_credentials.find(
+              (x) => x.org_id === p[0] && x.seat_id === p[1] && x.tool === p[2] && x.status === "ok",
+            );
+            if (!r) return { meta: { changes: 0 } };
+            r.status = "lost";
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("DELETE FROM seat_credentials WHERE org_id = ? AND seat_id = ? AND tool = ?")) {
@@ -567,6 +732,33 @@ export class FakeDB {
           if (q.startsWith("INSERT INTO seat_requests")) {
             const [id, org_id, seat_id, tools_json] = p as string[];
             t.seat_requests.push({ id, org_id, seat_id, tools_json, status: "proposed", created_at: "" });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE seat_requests SET nudged_at = datetime('now')")) {
+            const r = t.seat_requests.find((x) => x.id === p[0]);
+            if (r) r.nudged_at = "2999-01-01 00:00:00";
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO goals (id, org_id, team_id, title")) {
+            const [id, org_id, team_id, title] = p as string[];
+            t.goals.push({ id, org_id, team_id, title, squad: "[]", status: "active" });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO goal_events (goal_id, kind, title, detail)")) {
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO seat_milestones")) {
+            const [seat_id, milestone] = p as string[];
+            if (t.seat_milestones.some((x) => x.seat_id === seat_id && x.milestone === milestone)) {
+              throw new Error("UNIQUE constraint failed: seat_milestones");
+            }
+            t.seat_milestones.push({ seat_id, milestone, at: "" });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM seat_milestones WHERE seat_id = ?")) {
+            t.seat_milestones = t.seat_milestones.filter(
+              (x) => !(x.seat_id === p[0] && x.milestone === p[1]),
+            );
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("UPDATE seat_requests SET status = ?")) {

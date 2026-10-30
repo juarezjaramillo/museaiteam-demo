@@ -127,6 +127,11 @@ is an employee: its own inbox, its own seats, its own computer.
   then the org row retires. No org hire-path reads after the last
   seat verifies. Rollback = restore org rows from the pre-cut
   snapshot (documented runbook, 7-day window).
+- Shipped notes: the flip (`POST /cutover/flip`) requires zero
+  retirable org rows; Slack stays by design (inbound needs the
+  workspace token) while hire Slack reads still go seat-only.
+  GitHub offboard revoke needs the hire username + admin grant +
+  `provider_config.github.org`. Runbook: `docs/runbooks/seat-cutover.md`.
 
 ## 8. Effects on today's code
 

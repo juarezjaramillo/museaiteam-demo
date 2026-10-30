@@ -10,9 +10,12 @@ import {
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { BoxQuota, boxConfigured, provider } from "./box.js";
+import { retireOrgLinkIfDone } from "./cutover.js";
 import { audit } from "./db.js";
+import { maybeStartSessionOne } from "./enroll.js";
 import { notify } from "./notify.js";
 import { getSeat, listSeatMail } from "./seat-mail.js";
+import { trialGate } from "./trial.js";
 
 export type ProvisionStrategy = "api" | "browser" | "manual";
 
@@ -123,7 +126,7 @@ export async function decideSeatRequest(
   requestId: string,
   userId: string,
   approve: boolean,
-): Promise<"ok" | "notfound" | "decided"> {
+): Promise<"ok" | "notfound" | "decided" | "trial"> {
   const row = await env.DB.prepare(
     "SELECT id, seat_id, tools_json, status FROM seat_requests WHERE id = ? AND org_id = ?",
   )
@@ -131,6 +134,14 @@ export async function decideSeatRequest(
     .first<{ id: string; seat_id: string; tools_json: string; status: string }>();
   if (!row) return "notfound";
   if (row.status !== "proposed") return "decided";
+  const tools = JSON.parse(row.tools_json) as string[];
+  if (approve) {
+    // Trial gate lives here, not in the route, so no caller — UI,
+    // approve-all, future API — can release paid seats unpaid.
+    const gate = await trialGate(env, orgId);
+    const paid = gate.status.subscribed ? [] : paidTools(tools);
+    if (paid.length > 0) return "trial";
+  }
   const status = approve ? "approved" : "denied";
   const claimed = await env.DB.prepare(
     "UPDATE seat_requests SET status = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ? AND status = 'proposed'",
@@ -140,7 +151,6 @@ export async function decideSeatRequest(
   if ((claimed.meta.changes ?? 0) !== 1) return "decided";
   await audit(env, null, "human", "seat.request_decided", { org: orgId, id: row.id, status });
   if (approve) {
-    const tools = JSON.parse(row.tools_json) as string[];
     for (const tool of tools) {
       await env.DB.prepare(
         `INSERT INTO seat_provisions (seat_id, tool, step, status) VALUES (?, ?, 'invite', 'pending')
@@ -149,6 +159,15 @@ export async function decideSeatRequest(
         .bind(row.seat_id, tool)
         .run();
     }
+  } else {
+    // Denied asks close with a note: the hire plans around them, and
+    // the founder sees what was refused and why it matters.
+    const seat = await getSeat(env, orgId, row.seat_id).catch(() => null);
+    await notify(env, orgId, {
+      kind: "seat.requested",
+      title: `Seat asks denied for ${seat?.role ?? "hire"} — planning around them`.slice(0, 120),
+      body: `Denied: ${tools.join(", ")}. The hire will work without these.`,
+    });
   }
   return "ok";
 }
@@ -186,7 +205,7 @@ export async function saveAdminGrant(
   await audit(env, null, "human", "grant.saved", { org: orgId, tool });
 }
 
-async function loadAdminGrant(env: Env, orgId: string, tool: string): Promise<string | null> {
+export async function loadAdminGrant(env: Env, orgId: string, tool: string): Promise<string | null> {
   const row = await env.DB.prepare(
     "SELECT secret_enc FROM tool_admin_grants WHERE org_id = ? AND tool = ? AND status = 'granted'",
   )
@@ -312,7 +331,7 @@ export async function tickProvisions(env: Env): Promise<number> {
      FROM seat_provisions p
      JOIN seats s ON s.id = p.seat_id
      JOIN teams t ON t.id = s.team_id
-     WHERE p.status IN ('pending', 'waiting') LIMIT 50`,
+     WHERE p.status IN ('pending', 'waiting') AND s.frozen_at IS NULL LIMIT 50`,
   )
     .bind()
     .all<ProvisionRow & { org_id: string; email: string | null; role: string; attempts: number }>();
@@ -359,5 +378,17 @@ export async function verifySeatTool(
     .bind(seatId, tool)
     .run();
   await audit(env, null, "system", "seat.verified", { org: orgId, seat: seatId, tool });
+  // The org link retires once nobody needs it; a failed sweep never
+  // fails the verify — the next one retries.
+  await retireOrgLinkIfDone(env, orgId, tool).catch(() => {});
+  // Keystone verified unlocks session one. A blocked session start
+  // never fails the verify itself — the milestone records the attempt.
+  await maybeStartSessionOne(env, orgId, seatId, tool).catch(async (err) => {
+    await audit(env, null, "system", "session_one_blocked", {
+      org: orgId,
+      seat: seatId,
+      reason: String(err).slice(0, 160),
+    }).catch(() => {});
+  });
   return true;
 }

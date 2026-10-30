@@ -45,12 +45,16 @@ export async function receiveSeatMail(
     return "dropped";
   }
   const seat = await env.DB.prepare(
-    `SELECT s.id, t.org_id FROM seats s JOIN teams t ON t.id = s.team_id WHERE s.email = ?`,
+    `SELECT s.id, s.frozen_at, t.org_id FROM seats s JOIN teams t ON t.id = s.team_id WHERE s.email = ?`,
   )
     .bind(addr)
-    .first<{ id: string; org_id: string }>();
+    .first<{ id: string; frozen_at: string | null; org_id: string }>();
   if (!seat) {
     await audit(env, null, "system", "mail.unknown_seat", { to: addr });
+    return "dropped";
+  }
+  if (seat.frozen_at) {
+    await audit(env, null, "system", "mail.frozen", { to: addr });
     return "dropped";
   }
   // Invite loops and double deliveries land once per message id.

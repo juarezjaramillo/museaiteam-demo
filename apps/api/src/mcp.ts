@@ -13,7 +13,7 @@ import {
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { BoxOffline, provider as boxProvider } from "./box.js";
-import { audit } from "./db.js";
+import { OrgRetired, audit, orgCutOver } from "./db.js";
 import { advertisesOAuth, oauthAccess, refreshOAuth } from "./mcp-oauth.js";
 import { seatToken, seatToolIds } from "./seat-creds.js";
 
@@ -395,10 +395,13 @@ export async function serverSecretForSeat(
   server: McpServerRow,
   seatId: string | null,
 ): Promise<string | null> {
+  let own: string | null = null;
   if (seatId && (server.auth === "header" || server.auth === "query")) {
-    const own = await seatToken(env, server.org_id, seatId, `mcp:${server.id}`).catch(() => null);
+    own = await seatToken(env, server.org_id, seatId, `mcp:${server.id}`).catch(() => null);
     if (own) return own;
   }
+  // Cut over: seat or nothing. The org fallback is gone, not deprecated.
+  if (await orgCutOver(env, server.org_id)) return own;
   return serverSecret(env, server);
 }
 
@@ -556,6 +559,9 @@ export async function setSecret(
   secret: string,
   label: string,
 ): Promise<void> {
+  if (await orgCutOver(env, orgId)) {
+    throw new OrgRetired("org keys are retired here — save one per hire instead");
+  }
   const key = keyFromHex(env.TOKEN_ENC_KEY);
   await env.DB.prepare(
     `INSERT INTO mcp_credentials (id, org_id, server_id, label, secret_enc, updated_at)

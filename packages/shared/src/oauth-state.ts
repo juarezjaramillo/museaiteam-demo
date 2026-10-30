@@ -29,6 +29,7 @@ export async function signState(
   org: string,
   ttlSec = 600,
   shop?: string,
+  seat?: string,
 ): Promise<string> {
   const nonce = [...crypto.getRandomValues(new Uint8Array(8))]
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -40,6 +41,7 @@ export async function signState(
         nonce,
         exp: Date.now() + ttlSec * 1000,
         ...(shop ? { shop } : {}),
+        ...(seat ? { seat } : {}),
       }),
     ),
   );
@@ -55,6 +57,8 @@ export interface VerifiedState {
   org: string;
   /** Shopify store domain, bound at connect time; null otherwise. */
   shop: string | null;
+  /** Hire seat id for per-hire OAuth; null for org connects. */
+  seat: string | null;
 }
 
 export async function verifyState(
@@ -72,14 +76,17 @@ export async function verifyState(
     new TextEncoder().encode(payload),
   );
   if (!valid) throw new Error("bad state signature");
-  const { org, exp, shop } = JSON.parse(
+  const { org, exp, shop, seat } = JSON.parse(
     new TextDecoder().decode(b64urlDecode(payload)),
-  ) as { org: string; exp: number; shop?: unknown };
+  ) as { org: string; exp: number; shop?: unknown; seat?: unknown };
   if (typeof org !== "string" || Date.now() > exp) {
     throw new Error("state expired or invalid");
   }
   if (shop !== undefined && typeof shop !== "string") {
     throw new Error("state shop invalid");
   }
-  return { org, shop: shop ?? null };
+  if (seat !== undefined && typeof seat !== "string") {
+    throw new Error("state seat invalid");
+  }
+  return { org, shop: shop ?? null, seat: seat ?? null };
 }

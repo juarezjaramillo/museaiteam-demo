@@ -23,6 +23,15 @@ export function crewName(role: string): string {
   return CREW[role] ?? role;
 }
 
+/**
+ * The hire's tagged name, everywhere a customer reads it: sessions,
+ * handoffs, offboarding, the Hires page. The (AI) tag is part of the
+ * name, not a call-site choice, so it cannot be forgotten.
+ */
+export function hireDisplayName(role: string): string {
+  return `${CREW[role] ?? role} (AI)`;
+}
+
 const OWNER_FOR_SYSTEM: Record<string, string> = {
   github: "engineer",
   linear: "pm",

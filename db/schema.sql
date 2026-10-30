@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS orgs (
   idea_allowance_words INTEGER NOT NULL DEFAULT 250000,
   proposal_grace_hours INTEGER NOT NULL DEFAULT 72,
   box_max_concurrent INTEGER NOT NULL DEFAULT 3,
+  seat_cutover INTEGER NOT NULL DEFAULT 0,
   stripe_customer_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -124,6 +125,7 @@ CREATE TABLE IF NOT EXISTS seats (
   email TEXT,
   hired INTEGER NOT NULL DEFAULT 0,
   approved INTEGER NOT NULL DEFAULT 0,
+  frozen_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (team_id, role)
 );
@@ -503,6 +505,7 @@ CREATE TABLE IF NOT EXISTS seat_requests (
   status TEXT NOT NULL DEFAULT 'proposed',
   decided_by TEXT,
   decided_at TEXT,
+  nudged_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_seat_req_seat ON seat_requests(seat_id, status);
@@ -540,4 +543,11 @@ CREATE TABLE IF NOT EXISTS box_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_box_runs_org ON box_runs(org_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_box_runs_seat ON box_runs(seat_id, started_at);
+
+CREATE TABLE IF NOT EXISTS seat_milestones (
+  seat_id TEXT NOT NULL REFERENCES seats(id) ON DELETE CASCADE,
+  milestone TEXT NOT NULL,
+  at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (seat_id, milestone)
+);
 

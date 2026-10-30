@@ -37,7 +37,7 @@ export function Home({
     api.getActivity(org).then((r) => setActivity(r.activity)).catch(() => setActivity([]));
     api.getNotifications(org, true).then((n) => setAlerts(n.notifications)).catch(() => setAlerts([]));
     api.getConnections(org)
-      .then((c) => setConnected(Object.values(c).filter((s) => s === "connected").length))
+      .then((c) => setConnected(Object.values(c.status).filter((s) => s === "connected").length))
       .catch(() => setConnected(0));
     api.getOrg(org).then((g) => setIdeas(g.ideas)).catch(() => setIdeas(null));
   }, [org]);

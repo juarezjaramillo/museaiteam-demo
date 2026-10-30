@@ -151,6 +151,7 @@ function Step({
 function ToolsStep({
   org,
   conns,
+  retiring,
   servers,
   catalog,
   notify,
@@ -158,6 +159,7 @@ function ToolsStep({
 }: {
   org: string;
   conns: Record<string, string>;
+  retiring: Record<string, string>;
   servers: McpServer[];
   catalog: McpCatalogEntry[];
   notify: (m: string) => void;
@@ -265,7 +267,14 @@ function ToolsStep({
         <div className="conn-row" key={p}>
           <strong>{p}</strong>{" "}
           {conns[p] === "connected" ? (
-            <span className="badge soft">connected</span>
+            <span>
+              <span className="badge soft">connected</span>{" "}
+              {retiring[p] && (
+                <span className="dim">
+                  shared — move the {retiring[p]} hire to its own login (Hires page)
+                </span>
+              )}
+            </span>
           ) : conns[p] === "expired" ? (
             <span>
               <span className="badge warn">expired</span>{" "}
@@ -680,6 +689,7 @@ function MemoryBlock({ org, notify }: { org: string; notify: (m: string) => void
 export function Setup({ org }: { org: string }) {
   const [guards, setGuards] = useState<GuardrailRow[]>([]);
   const [conns, setConns] = useState<Record<string, string>>({});
+  const [retiring, setRetiring] = useState<Record<string, string>>({});
   const [servers, setServers] = useState<McpServer[]>([]);
   const [catalog, setCatalog] = useState<McpCatalogEntry[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
@@ -690,7 +700,9 @@ export function Setup({ org }: { org: string }) {
   }
 
   async function loadConns() {
-    setConns(await api.getConnections(org));
+    const r = await api.getConnections(org);
+    setConns(r.status);
+    setRetiring(r.retiring);
   }
 
   async function loadMcp() {
@@ -754,6 +766,7 @@ export function Setup({ org }: { org: string }) {
         <ToolsStep
           org={org}
           conns={conns}
+          retiring={retiring}
           servers={servers}
           catalog={catalog}
           notify={setNote}

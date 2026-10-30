@@ -420,7 +420,7 @@ export function App() {
           ))}
 
         {tab === "approvals" && <Approvals org={org} onRun={openRun} />}
-        {tab === "hires" && <Hires org={org} />}
+        {tab === "hires" && <Hires org={org} role={role} />}
         {tab === "lessons" && <Lessons org={org} />}
         {tab === "team" && <Team org={org} role={role} />}
         {tab === "alerts" && (

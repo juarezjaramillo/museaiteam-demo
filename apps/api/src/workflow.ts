@@ -99,7 +99,7 @@ import { addFeedback } from "./feedback.js";
 import { executeRevert } from "./revert.js";
 import { chargeIdea } from "./allowance.js";
 import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
-import { hireToken, seatForRole } from "./seat-creds.js";
+import { hireToken, markSeatLost, seatForRole, seatReadyForServer, seatToolIds } from "./seat-creds.js";
 
 export interface GoalRunParams {
   runId: string;
@@ -1544,6 +1544,19 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           });
           return;
         }
+        // Reroute: a seat-bound server without the hire's own login
+        // skips per call — the team does other work meanwhile, and the
+        // skip shows up as doing-meanwhile instead of a failure.
+        if (loopSeat && !(await seatReadyForServer(this.env, orgId, loopSeat, found.server.id))) {
+          await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "skipped", undefined, {
+            server: found.server.name,
+            tool: tool.name,
+            reason: "seatless",
+            note: `waiting on the hire's own ${found.server.name} seat — doing other work meanwhile`,
+          });
+          history += `\n- ${found.server.name}.${tool.name}: skipped (hire seat not ready yet)`;
+          continue;
+        }
         if (isSensitiveTool(tool.name, tool.annotations, tagsForUrl(found.server.url))) {
           const actionId = await this.recordAction(
             runId,
@@ -1591,6 +1604,19 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
             found.server.auth !== "none";
           if (needsAccount) {
             await requestSignup(this.env, orgId, found.server, msg).catch(() => {});
+            // Seat lost at the vendor: an auth failure on a bound
+            // server flips the hire's login to lost (once) and tasks
+            // the founder to re-request or accept. Never silent.
+            if (loopSeat && (await seatToolIds(this.env, loopSeat)).includes(found.server.id)) {
+              const lost = await markSeatLost(this.env, orgId, loopSeat, `mcp:${found.server.id}`).catch(() => false);
+              if (lost) {
+                await notify(this.env, orgId, {
+                  kind: "seat.lost",
+                  title: `${found.server.name} seat lost — re-connect or accept`.slice(0, 120),
+                  body: `The hire's ${found.server.name} login stopped working (${msg.slice(0, 120)}). Vault a fresh one or remove the binding.`,
+                }).catch(() => {});
+              }
+            }
           }
           await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "failed", undefined, {
             server: found.server.name,

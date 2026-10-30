@@ -181,6 +181,7 @@ const NOTICE_WORDS: Record<string, string> = {
   "seat.requested": "Seat request",
   "seat.verified": "Seat ready",
   "seat.lost": "Seat lost",
+  "seat.fired": "Hire offboarded",
   "provision.failed": "Seat needs help",
   "billing.past_due": "Payment failed",
   "billing.canceling": "Subscription ending",

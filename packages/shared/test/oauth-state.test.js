@@ -7,6 +7,7 @@ test("sign/verify round-trips the org", async () => {
   assert.deepEqual(await verifyState("s3cret", state), {
     org: "demo",
     shop: null,
+    seat: null,
   });
 });
 
@@ -15,6 +16,16 @@ test("sign/verify round-trips an optional shop", async () => {
   assert.deepEqual(await verifyState("s3cret", state), {
     org: "demo",
     shop: "store.myshopify.com",
+    seat: null,
+  });
+});
+
+test("sign/verify round-trips an optional hire seat", async () => {
+  const state = await signState("s3cret", "demo", 600, undefined, "seat1");
+  assert.deepEqual(await verifyState("s3cret", state), {
+    org: "demo",
+    shop: null,
+    seat: "seat1",
   });
 });
 

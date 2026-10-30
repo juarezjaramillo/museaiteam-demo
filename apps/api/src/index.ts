@@ -5,6 +5,7 @@ import {
   SEAT_ROLES,
   mayDecideApproval,
   normalizeShop,
+  ownerFor,
   signState,
   trialStatus,
   validateProviderConfig,
@@ -51,7 +52,16 @@ import {
 import { runBaseline } from "./baseline.js";
 import { BoxOffline, BoxQuota, boxSpend, provider, reconcileBoxes } from "./box.js";
 import { audit, getRun } from "./db.js";
-import { listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
+import { nudgeSeatRequests, teamSeats } from "./enroll.js";
+import { getSeat, listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
+import {
+  cutoverStatus,
+  finishSeatConnect,
+  flipCutover,
+  retireOrgLinkIfDone,
+  retireServerSecret,
+} from "./cutover.js";
+import { fireSeat, sweepFrozenSeats } from "./offboard.js";
 import {
   decideSeatRequest,
   requestSeats,
@@ -88,7 +98,9 @@ import {
 import { executeRevert } from "./revert.js";
 import {
   ProviderNotConfigured,
+  callbackUrl,
   connectUrl,
+  exchangeCode,
   finishConnect,
   getProviderConfig,
   isProvider,
@@ -899,6 +911,11 @@ app.get("/api/auth/:provider/connect", async (c) => {
       );
     }
   }
+  // Per-hire OAuth: ?seat= binds the grant to the hire's vault.
+  const seatParam = c.req.query("seat") ?? undefined;
+  if (seatParam && !(await getSeat(c.env, org, seatParam))) {
+    return c.json({ error: "unknown seat" }, 400);
+  }
   const base = new URL(c.req.url).origin;
   try {
     const url = await connectUrl(
@@ -907,6 +924,7 @@ app.get("/api/auth/:provider/connect", async (c) => {
       org,
       base,
       c.req.query("shop") ?? undefined,
+      seatParam,
     );
     return c.redirect(url, 302);
   } catch (err) {
@@ -961,21 +979,43 @@ app.get("/api/auth/:provider/callback", async (c) => {
   if (!isProvider(provider) || !code || !state) {
     return fail(`${provider} connect failed`);
   }
+  const verified = await verifyState(c.env.AUTH_SECRET, state).catch(() => ({
+    org: "",
+    shop: null,
+    seat: null,
+  }));
   {
     // The completer must own the org the state binds: the sign-in cookie
     // survives the provider round-trip, so a missing session is a forgery.
     const user = await getSessionUser(c.env, c.req.raw);
-    const { org } = await verifyState(c.env.AUTH_SECRET, state).catch(() => ({
-      org: "",
-      shop: null,
-    }));
-    const role = user && org ? await memberRole(c.env, org, user.id) : null;
+    const role =
+      user && verified.org ? await memberRole(c.env, verified.org, user.id) : null;
     if (!user || role !== "owner") {
       return fail(`${provider} connect needs an owner session`);
     }
   }
   try {
     const base = new URL(c.req.url).origin;
+    if (verified.seat) {
+      const tokens = await exchangeCode(
+        c.env,
+        provider,
+        code,
+        callbackUrl(base, provider),
+        verified.shop,
+      );
+      await finishSeatConnect(c.env, verified.org, verified.seat, provider, tokens);
+      await audit(c.env, null, "human", "integration.connected", {
+        org: verified.org,
+        provider,
+        seat: verified.seat,
+        grantedScope: tokens.grantedScope ?? "unknown",
+      });
+      return c.redirect(
+        `${c.env.APP_URL}/?connected=${provider}&org=${encodeURIComponent(verified.org)}&seat=${encodeURIComponent(verified.seat)}`,
+        302,
+      );
+    }
     const { org, grantedScope } = await finishConnect(
       c.env,
       provider,
@@ -1072,7 +1112,14 @@ app.get("/api/orgs/:org/connections", async (c) => {
   for (const p of PROVIDER_IDS) {
     status[p] = await tokenStatus(c.env, org, p);
   }
-  return c.json({ status });
+  // Retiring banner data: connected org links that still need a
+  // per-hire home, each with the seat role that owns it.
+  const cut = await cutoverStatus(c.env, org);
+  const retiring: Record<string, string> = {};
+  for (const p of cut.providers) {
+    if (status[p] === "connected") retiring[p] = ownerFor(`${p}.x`);
+  }
+  return c.json({ status, cutOver: cut.cutOver, retiring });
 });
 
 /** Tool servers: the registry plus the shipped catalog. Secrets never read back. */
@@ -1337,23 +1384,10 @@ app.post(
   async (c) => {
     const org = await roleOrg(c, ...DECIDERS);
     if (!org) return c.json({ error: "forbidden" }, 403);
-    if (c.req.valid("json").approve) {
-      const gate = await trialGate(c.env, org);
-      if (!gate.status.subscribed) {
-        const row = await c.env.DB.prepare(
-          "SELECT tools_json FROM seat_requests WHERE id = ? AND org_id = ?",
-        )
-          .bind(c.req.param("id"), org)
-          .first<{ tools_json: string }>();
-        const paid = row ? paidTools(JSON.parse(row.tools_json) as string[]) : [];
-        if (paid.length > 0) {
-          return c.json({ error: `trial covers free tools only — paid seats wait: ${paid.join(", ")}` }, 403);
-        }
-      }
-    }
     const res = await decideSeatRequest(c.env, org, c.req.param("id"), c.get("user").id, c.req.valid("json").approve);
     if (res === "notfound") return c.json({ error: "not found" }, 404);
     if (res === "decided") return c.json({ error: "already decided" }, 409);
+    if (res === "trial") return c.json({ error: "trial covers free tools only — paid seats wait for a subscription" }, 403);
     return c.json({ ok: true });
   },
 );
@@ -1394,6 +1428,77 @@ app.get("/api/orgs/:org/box/spend", async (c) => {
   return c.json({ spend: await boxSpend(c.env, org, Date.now() - 30 * 86_400_000) });
 });
 
+app.get("/api/orgs/:org/team/seats", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  return c.json(await teamSeats(c.env, org));
+});
+
+app.delete("/api/orgs/:org/seats/:id", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const res = await fireSeat(c.env, org, c.req.param("id"));
+  if (res === "notfound") return c.json({ error: "not found" }, 404);
+  return c.json({ ok: true });
+});
+
+app.get("/api/orgs/:org/cutover", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  return c.json(await cutoverStatus(c.env, org));
+});
+
+/**
+ * Guided migration: every seat gets its asks from the map, dead org
+ * links retire on the spot, and the founder gets one checklist back.
+ * Re-runnable — proposed asks dedupe, verifies only move forward.
+ */
+app.post("/api/orgs/:org/cutover/migrate", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const seats = await c.env.DB.prepare(
+    "SELECT s.id FROM seats s JOIN teams t ON t.id = s.team_id WHERE t.org_id = ? AND s.frozen_at IS NULL",
+  )
+    .bind(org)
+    .all<{ id: string }>();
+  const checklist: Array<{ seatId: string; requestId: string; tools: string[] } | { seatId: string; error: string }> = [];
+  for (const s of seats.results ?? []) {
+    try {
+      const req = await requestSeats(c.env, org, s.id);
+      checklist.push({ seatId: s.id, requestId: req.id, tools: req.tools });
+    } catch (err) {
+      checklist.push({ seatId: s.id, error: String(err).slice(0, 120) });
+    }
+  }
+  const status = await cutoverStatus(c.env, org);
+  const retired: string[] = [];
+  for (const p of status.providers) {
+    if ((await retireOrgLinkIfDone(c.env, org, p).catch(() => "kept")) === "retired") retired.push(p);
+  }
+  return c.json({ checklist, retired, status: await cutoverStatus(c.env, org) });
+});
+
+app.post("/api/orgs/:org/cutover/flip", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const res = await flipCutover(c.env, org);
+  if (!res.ok) {
+    return c.json(
+      { error: "org links remain", providers: res.providers, servers: res.servers },
+      409,
+    );
+  }
+  return c.json({ ok: true });
+});
+
+app.delete("/api/orgs/:org/mcp/:id/secret", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const ok = await retireServerSecret(c.env, org, c.req.param("id"));
+  if (!ok) return c.json({ error: "no org key on that server" }, 404);
+  return c.json({ ok: true });
+});
+
 app.get("/api/orgs/:org/seats/:id/provisions", async (c) => {
   const org = await roleOrg(c, ...DECIDERS);
   if (!org) return c.json({ error: "forbidden" }, 403);
@@ -1422,6 +1527,7 @@ app.put(
       kind: z.enum(["password", "token", "oauth", "session"]),
       secret: z.string().min(1).max(4000),
       loginUser: z.string().max(200).optional(),
+      expiresAtMs: z.number().int().positive().optional(),
     }),
   ),
   async (c) => {
@@ -1434,6 +1540,7 @@ app.put(
         kind: b.kind,
         secret: b.secret,
         loginUser: b.loginUser,
+        expiresAtMs: b.expiresAtMs,
       });
     } catch (err) {
       return c.json({ error: String(err).slice(0, 120) }, 404);
@@ -2165,5 +2272,7 @@ export default {
     ctx.waitUntil(guardTick(env, "errorWatch", () => tickErrorWatch(env)));
     ctx.waitUntil(guardTick(env, "provisions", () => tickProvisions(env)));
     ctx.waitUntil(guardTick(env, "boxReconcile", () => reconcileBoxes(env)));
+    ctx.waitUntil(guardTick(env, "seatNudge", () => nudgeSeatRequests(env)));
+    ctx.waitUntil(guardTick(env, "sweepFrozen", () => sweepFrozenSeats(env)));
   },
 };

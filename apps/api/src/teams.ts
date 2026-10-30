@@ -6,6 +6,7 @@ import {
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { audit } from "./db.js";
+import { decideSeatRequest, requestSeats } from "./provision.js";
 
 export interface Seat {
   id: string;
@@ -152,6 +153,9 @@ export async function hireSeat(
     .bind(id, target, role, seatEmail(role, id))
     .run();
   await audit(env, null, "human", "seat.hired", { org: orgId, team: target, role, overflow });
+  // Enrollment step 1: the inbox is live (email exists) and the seat
+  // asks are proposed from the map the moment the hire exists.
+  await requestSeats(env, orgId, id);
   return { id, teamId: target, overflow };
 }
 
@@ -182,6 +186,21 @@ export async function approveSeat(
     team: seat.team_id,
     role: seat.role,
   });
+  // Approve-all: one founder action seats the hire AND releases its
+  // tool asks into provisioning. No pending ask, nothing to release.
+  const pending = await env.DB.prepare(
+    "SELECT id FROM seat_requests WHERE seat_id = ? AND status = 'proposed' ORDER BY created_at LIMIT 1",
+  )
+    .bind(seatId)
+    .first<{ id: string }>();
+  if (pending) {
+    const res = await decideSeatRequest(env, orgId, pending.id, `approve-all:${seatId}`, true);
+    if (res === "trial") {
+      // Trial: the seat joins, the paid asks stay proposed — the
+      // founder releases them after subscribing. Never half-approved.
+      await audit(env, null, "system", "seat.request_trial_held", { org: orgId, id: pending.id });
+    }
+  }
   return true;
 }
 

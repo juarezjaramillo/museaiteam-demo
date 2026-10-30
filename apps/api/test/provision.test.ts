@@ -15,8 +15,9 @@ import { FakeDB, blankTables } from "./fake-db.js";
 
 const KEY = "ab".repeat(32);
 
-function env() {
+function env(subscribed = 1) {
   const tables = blankTables();
+  tables.orgs.push({ id: "org1", box_max_concurrent: 3, subscribed });
   tables.teams.push({ id: "t1", org_id: "org1" });
   tables.seats.push({ id: "s1", team_id: "t1", role: "engineer", email: "e@hires" });
   return { env: { DB: new FakeDB(tables), TOKEN_ENC_KEY: KEY } as unknown as Env, tables };
@@ -124,5 +125,17 @@ describe("provisioning", () => {
     expect(await verifySeatTool(e, "org1", "s1", "linear")).toBe(false);
     expect(await keystoneVerified(e, "s1", "engineer")).toBe(true);
     expect(await keystoneVerified(e, "s1", "pm")).toBe(false);
+  });
+
+  it("blocks paid asks on trial, and denied asks close with a note", async () => {
+    const { env: e, tables } = env(0);
+    const req = await requestSeats(e, "org1", "s1");
+    expect(req.tools).toContain("github");
+    expect(await decideSeatRequest(e, "org1", req.id, "u1", true)).toBe("trial");
+    expect(tables.seat_provisions).toHaveLength(0);
+    expect(await decideSeatRequest(e, "org1", req.id, "u1", false)).toBe("ok");
+    const note = tables.notifications.find((n) => n.kind === "seat.requested" && String(n.title).includes("denied"));
+    expect(note).toBeTruthy();
+    expect(String(note?.body)).toMatch(/github/);
   });
 });

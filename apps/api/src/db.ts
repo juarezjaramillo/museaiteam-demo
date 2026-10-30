@@ -1,5 +1,19 @@
 import type { Env } from "./bindings.js";
 
+export class OrgRetired extends Error {}
+
+/**
+ * True once the org finished the per-hire cutover: hire paths read
+ * seat credentials only, and org credential rows stop being written.
+ * Lives here so every reader/writer shares one flag with no cycles.
+ */
+export async function orgCutOver(env: Env, orgId: string): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT seat_cutover FROM orgs WHERE id = ?")
+    .bind(orgId)
+    .first<{ seat_cutover: number }>();
+  return (row?.seat_cutover ?? 0) === 1;
+}
+
 export interface RunRow {
   id: string;
   org_id: string;
