@@ -16,6 +16,29 @@ export function isKnownProvider(s: string): s is ProviderId {
   return (PROVIDER_IDS as readonly string[]).includes(s);
 }
 
+/** Display names for the provider pickers — one map, every surface. */
+export const PROVIDER_LABELS: Record<ProviderId, string> = {
+  github: "GitHub",
+  linear: "Linear",
+  slack: "Slack",
+  shopify: "Shopify",
+  hubspot: "HubSpot",
+  notion: "Notion",
+};
+
+/**
+ * Tool id an MCP server provisions as: known providers by name, anything
+ * else as its own box tool. Shared so the dashboard picker and the API
+ * can never disagree on what a server grants. Pure, unit-pinned.
+ */
+export function toolForServer(server: { id: string; name: string; url: string }): string {
+  const hay = `${server.name} ${server.url}`.toLowerCase();
+  for (const p of PROVIDER_IDS) {
+    if (hay.includes(p)) return p;
+  }
+  return `mcp:${server.id}`;
+}
+
 /** Only Shopify's OAuth dance needs extra input (the store domain). */
 export function providerNeedsShop(provider: string): boolean {
   return provider === "shopify";

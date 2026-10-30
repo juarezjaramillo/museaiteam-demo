@@ -8,7 +8,6 @@ import {
   isSeatMapRole,
   keyFromHex,
   paidTools,
-  PROVIDER_IDS,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { BoxQuota, boxConfigured, provider } from "./box.js";
@@ -86,18 +85,6 @@ export function normalizeTools(tools: unknown): string[] {
       .map((t) => t.trim().toLowerCase().slice(0, 120))
       .filter(Boolean),
   )].slice(0, 20);
-}
-
-/**
- * Tool id an MCP server provisions as: known providers by name, anything
- * else as its own box tool. Pure, so the mapping is unit-pinned.
- */
-export function toolForServer(server: { id: string; name: string; url: string }): string {
-  const hay = `${server.name} ${server.url}`.toLowerCase();
-  for (const p of PROVIDER_IDS) {
-    if (hay.includes(p)) return p;
-  }
-  return `mcp:${server.id}`;
 }
 
 /** Tools with no live coverage: not verified, provisioning, or asked. */

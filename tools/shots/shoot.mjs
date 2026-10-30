@@ -55,6 +55,13 @@ const FIX = {
   },
   "/api/orgs/o1/approvals": { approvals: [] },
   "/api/orgs/o1/proposals": { proposals: [] },
+  "/api/orgs/o1/mcp": {
+    servers: [
+      { id: "srv-figma", name: "Figma", url: "https://mcp.figma.com", auth: "header", authName: "token", source: "founder", status: "trusted", spendCapCents: 0, hasSecret: true },
+      { id: "srv-weird", name: "Acme Tracker", url: "https://acme.example/mcp", auth: "none", authName: "", source: "founder", status: "trusted", spendCapCents: 0, hasSecret: false },
+    ],
+    catalog: [],
+  },
 };
 
 const server = createServer(async (req, res) => {
@@ -93,18 +100,28 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+const CORS = {
+  "Access-Control-Allow-Origin": "http://127.0.0.1:18923",
+  "Access-Control-Allow-Credentials": "true",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+  "Access-Control-Allow-Headers": "content-type,authorization",
+};
 await page.setRequestInterception(true);
 page.on("request", (req) => {
   const url = req.url();
   if (url.startsWith(API + "/api/")) {
-    const key = url.slice(API.length);
-    const hit = FIX[key] ?? null;
-    if (hit && req.method() === "GET") {
-      req.respond({ status: 200, contentType: "application/json", body: JSON.stringify(hit) });
+    if (req.method() === "OPTIONS") {
+      req.respond({ status: 204, headers: CORS, body: "" });
       return;
     }
-    console.log("UNMOCKED:", req.method(), key);
-    req.respond({ status: 200, contentType: "application/json", body: "{}" });
+    const key = url.slice(API.length).replace(/\/api\/orgs\/[^/]+\//, "/api/orgs/o1/");
+    const hit = FIX[key] ?? null;
+    if (!hit) console.log("UNMOCKED:", req.method(), key);
+    req.respond({
+      status: 200,
+      headers: { ...CORS, "content-type": "application/json" },
+      body: JSON.stringify(hit ?? {}),
+    });
     return;
   }
   req.continue();
@@ -132,6 +149,15 @@ if (tab === "hires") {
     await rows[1].click();
     await new Promise((r) => setTimeout(r, 400));
   }
+  const btns = await page.$$("button");
+  for (const b of btns) {
+    const t = await b.evaluate((el) => el.textContent);
+    if (t?.trim() === "give tools") {
+      await b.click();
+      await new Promise((r) => setTimeout(r, 400));
+      break;
+    }
+  }
   const menus = await page.$$(".hire .icon-btn");
   if (menus[1]) {
     await menus[1].click();
@@ -139,6 +165,15 @@ if (tab === "hires") {
   }
 }
 await page.screenshot({ path: `/tmp/shots/${tab}.png` });
+// Fixtures always describe a signed-in founder: a Sign in link means the
+// mocks silently stopped applying and the shot would prove nothing.
+const signedOut = await page.evaluate(() =>
+  [...document.querySelectorAll("a")].some((a) => a.textContent?.trim() === "Sign in"),
+);
 await browser.close();
 server.close();
+if (signedOut) {
+  console.error("SHOT VOID: app rendered signed-out, fixtures did not apply");
+  process.exit(1);
+}
 console.log(`wrote /tmp/shots/${tab}.png`);

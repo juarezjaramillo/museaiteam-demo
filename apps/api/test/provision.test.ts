@@ -12,9 +12,9 @@ import {
   setSeatMap,
   strategyFor,
   tickProvisions,
-  toolForServer,
   verifySeatTool,
 } from "../src/provision.js";
+import { toolForServer } from "@museaiteam/shared";
 import { setSeatCredential } from "../src/seat-creds.js";
 import { FakeDB, blankTables } from "./fake-db.js";
 

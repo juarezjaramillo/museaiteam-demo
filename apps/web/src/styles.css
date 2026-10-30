@@ -768,6 +768,24 @@ button.link.danger-text,
   gap: var(--s2);
   cursor: pointer;
 }
+.grant {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.grant ul {
+  margin: 0;
+  gap: var(--s1);
+}
+.grant ul.list > li {
+  padding: var(--s2) var(--s3);
+  box-shadow: none;
+}
+.grant ul.list > li:hover {
+  box-shadow: none;
+  border-color: var(--accent);
+}
 
 .badge.warn {
   background: var(--warn-bg);

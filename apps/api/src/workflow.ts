@@ -15,6 +15,7 @@ import {
   mcpCallLabel,
   nextAttempt,
   ownerFor,
+  toolForServer,
   type Action,
   type Proposal,
   type SeatRole,
@@ -100,7 +101,7 @@ import { executeRevert } from "./revert.js";
 import { chargeIdea } from "./allowance.js";
 import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
 import { hireToken, markSeatLost, seatForRole, seatReadyForServer, seatToolIds } from "./seat-creds.js";
-import { askForSeats, seatAskLines, toolForServer } from "./provision.js";
+import { askForSeats, seatAskLines } from "./provision.js";
 
 export interface GoalRunParams {
   runId: string;

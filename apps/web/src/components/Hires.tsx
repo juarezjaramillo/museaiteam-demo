@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { crewName, hireDisplayName } from "@museaiteam/shared";
-import { api, type HireRow } from "../api.js";
+import { PROVIDER_IDS, PROVIDER_LABELS, crewName, hireDisplayName, paidTools, toolForServer } from "@museaiteam/shared";
+import { api, type HireRow, type McpServer } from "../api.js";
 import { ThumbDown, ThumbUp } from "./icons.js";
 
 interface SeatView {
@@ -79,8 +79,39 @@ function RelayForm({ org, seatId, tool, done }: { org: string; seatId: string; t
   );
 }
 
-function GrantForm({ org, seatId, done }: { org: string; seatId: string; done: () => void }) {
-  const [tools, setTools] = useState("");
+interface GrantOption {
+  tool: string;
+  label: string;
+  sub: string | null;
+}
+
+function grantOptions(servers: McpServer[]): GrantOption[] {
+  const opts: GrantOption[] = PROVIDER_IDS.map((p) => ({ tool: p, label: PROVIDER_LABELS[p], sub: null }));
+  const seen = new Set(opts.map((o) => o.tool));
+  for (const s of servers) {
+    const tool = toolForServer(s);
+    if (seen.has(tool)) continue;
+    seen.add(tool);
+    opts.push({ tool, label: s.name, sub: "your setup" });
+  }
+  return opts;
+}
+
+function GrantForm({
+  org,
+  seatId,
+  covered,
+  servers,
+  done,
+}: {
+  org: string;
+  seatId: string;
+  covered: string[];
+  servers: McpServer[];
+  done: () => void;
+}) {
+  const [pick, setPick] = useState<string[]>([]);
+  const [q, setQ] = useState("");
   const [msg, setMsg] = useState("");
   const [open, setOpen] = useState(false);
   if (!open) {
@@ -90,11 +121,21 @@ function GrantForm({ org, seatId, done }: { org: string; seatId: string; done: (
       </button>
     );
   }
+  const have = new Set(covered);
+  const paid = new Set(paidTools(grantOptions(servers).map((o) => o.tool)));
+  const needle = q.trim().toLowerCase();
+  const opts = grantOptions(servers).filter(
+    (o) => !needle || o.label.toLowerCase().includes(needle) || o.tool.includes(needle),
+  );
+  function toggle(tool: string) {
+    setPick((prev) => (prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool]));
+  }
   async function grant() {
     setMsg("");
     try {
-      const r = await api.grantSeatTools(org, seatId, tools.split(/[,\s]+/).filter(Boolean));
-      setTools("");
+      const r = await api.grantSeatTools(org, seatId, pick);
+      setPick([]);
+      setQ("");
       setOpen(false);
       done();
       if (r.granted.length === 0) setMsg("Nothing new — all covered.");
@@ -103,16 +144,42 @@ function GrantForm({ org, seatId, done }: { org: string; seatId: string; done: (
     }
   }
   return (
-    <span className="row">
+    <div className="grant">
       <input
-        placeholder="figma, linear"
-        value={tools}
-        onChange={(e) => setTools(e.target.value)}
+        placeholder="Search tools…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
       />
-      <button className="primary" onClick={grant}>Give</button>
-      <button className="link" onClick={() => setOpen(false)}>cancel</button>
-      {msg && <span className="dim">{msg}</span>}
-    </span>
+      <ul className="list">
+        {opts.map((o) => (
+          <li key={o.tool}>
+            <label className="ask-tool">
+              <input
+                type="checkbox"
+                checked={have.has(o.tool) || pick.includes(o.tool)}
+                disabled={have.has(o.tool)}
+                onChange={() => toggle(o.tool)}
+              />
+              <span>{o.label}</span>
+              {o.sub && <span className="dim">({o.sub})</span>}
+              {paid.has(o.tool) && !have.has(o.tool) && <span className="dim">(paid seat)</span>}
+              {have.has(o.tool) && <span className="dim">(has it)</span>}
+            </label>
+          </li>
+        ))}
+        {opts.length === 0 && <li className="dim">No tools match — try another word.</li>}
+      </ul>
+      <div className="row">
+        <button className="primary sm" disabled={pick.length === 0} onClick={grant}>
+          Give{pick.length > 0 ? ` (${pick.length})` : ""}
+        </button>
+        <button className="link" onClick={() => setOpen(false)}>cancel</button>
+        {msg && <span className="dim">{msg}</span>}
+      </div>
+      <p className="dim">
+        Need another tool? <a href="#/setup">Add it in Setup</a> first.
+      </p>
+    </div>
   );
 }
 
@@ -127,6 +194,7 @@ function HireCard({
   onMenu,
   act,
   reload,
+  servers,
 }: {
   org: string;
   seat: SeatView;
@@ -138,6 +206,7 @@ function HireCard({
   onMenu: (open: boolean) => void;
   act: (fn: () => Promise<unknown>, fail: string) => void;
   reload: () => void;
+  servers: McpServer[];
 }) {
   const st = statusOf(s);
   const lost = s.logins.filter((l) => l.status === "lost");
@@ -241,7 +310,19 @@ function HireCard({
               <> · {Math.round(s.spend.seconds / 60)} min · about ${(s.spend.cents / 100).toFixed(2)}</>
             )}
           </p>
-          {canDecide && <GrantForm org={org} seatId={s.id} done={reload} />}
+          {canDecide && (
+            <GrantForm
+              org={org}
+              seatId={s.id}
+              covered={[
+                ...s.on,
+                ...s.waiting.map((w) => w.tool),
+                ...(s.request?.status === "proposed" ? s.request.tools : []),
+              ]}
+              servers={servers}
+              done={reload}
+            />
+          )}
         </div>
       )}
     </li>
@@ -251,6 +332,7 @@ function HireCard({
 export function Hires({ org, role }: { org: string; role: string }) {
   const [hires, setHires] = useState<HireRow[]>([]);
   const [seats, setSeats] = useState<SeatView[]>([]);
+  const [servers, setServers] = useState<McpServer[]>([]);
   const [meanwhile, setMeanwhile] = useState<string[]>([]);
   const [cutover, setCutover] = useState<{ cutOver: boolean; providers: string[]; servers: string[]; kept: string[] } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -264,6 +346,7 @@ export function Hires({ org, role }: { org: string; role: string }) {
     setMeanwhile(t.meanwhile);
     const h = await api.getHires(org);
     setHires(h.hires);
+    setServers((await api.getMcp(org)).servers);
     if (role === "owner") {
       setCutover(await api.getCutover(org));
     }
@@ -308,6 +391,7 @@ export function Hires({ org, role }: { org: string; role: string }) {
             onMenu={(o) => setMenu(o ? s.id : null)}
             act={act}
             reload={load}
+            servers={servers}
           />
         ))}
       </ul>
