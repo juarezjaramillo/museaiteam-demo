@@ -13,6 +13,7 @@ import {
 import type { Env } from "./bindings.js";
 import { audit } from "./db.js";
 import { advertisesOAuth, oauthAccess, refreshOAuth } from "./mcp-oauth.js";
+import { seatToken, seatToolIds } from "./seat-creds.js";
 
 export interface McpServerRow {
   id: string;
@@ -156,18 +157,27 @@ export async function probeServer(
  * Probe a registered server row: resolves its credential and retries
  * once after an OAuth refresh, exactly like a tool call.
  */
-export async function probeServerRow(env: Env, server: McpServerRow): Promise<ProbeResult> {
+export async function probeServerRow(
+  env: Env,
+  server: McpServerRow,
+  seatId: string | null = null,
+): Promise<ProbeResult> {
   try {
     return await probeServer(
       server.url,
-      await serverSecret(env, server),
+      await serverSecretForSeat(env, server, seatId),
       server.auth === "oauth" ? "header" : server.auth,
       server.auth === "oauth" ? "authorization" : server.auth_name,
     );
   } catch (err) {
     if (server.auth === "oauth" && err instanceof McpError && err.code === "auth") {
       await refreshOAuth(env, server);
-      return probeServer(server.url, await serverSecret(env, server), "header", "authorization");
+      return probeServer(
+        server.url,
+        await serverSecretForSeat(env, server, seatId),
+        "header",
+        "authorization",
+      );
     }
     throw err;
   }
@@ -193,9 +203,10 @@ export async function callTool(
   server: McpServerRow,
   tool: string,
   args: Record<string, unknown>,
+  seatId: string | null = null,
   retried = false,
 ): Promise<string> {
-  const secret = await serverSecret(env, server);
+  const secret = await serverSecretForSeat(env, server, seatId);
   let json: unknown;
   try {
     json = await rpc(
@@ -216,7 +227,7 @@ export async function callTool(
       err.code === "auth"
     ) {
       await refreshOAuth(env, server);
-      return callTool(env, server, tool, args, true);
+      return callTool(env, server, tool, args, seatId, true);
     }
     throw err;
   }
@@ -247,6 +258,38 @@ export async function listServers(env: Env, orgId: string): Promise<McpServerRow
     .bind(orgId)
     .all<McpServerRow>();
   return rows.results ?? [];
+}
+
+/**
+ * Servers a seat may use: its bindings once it has any, else every
+ * org server (legacy until seats bind tools in phase 3+).
+ */
+export async function listServersForSeat(
+  env: Env,
+  orgId: string,
+  seatId: string | null,
+): Promise<McpServerRow[]> {
+  const all = await listServers(env, orgId);
+  if (!seatId) return all;
+  const bound = await seatToolIds(env, seatId);
+  if (!bound.length) return all;
+  return all.filter((s) => bound.includes(s.id));
+}
+
+/**
+ * Seat-first secret: the seat's own `mcp:<server>` token for keyed
+ * servers, else the org credential. OAuth seats arrive in phase 3.
+ */
+export async function serverSecretForSeat(
+  env: Env,
+  server: McpServerRow,
+  seatId: string | null,
+): Promise<string | null> {
+  if (seatId && (server.auth === "header" || server.auth === "query")) {
+    const own = await seatToken(env, server.org_id, seatId, `mcp:${server.id}`).catch(() => null);
+    if (own) return own;
+  }
+  return serverSecret(env, server);
 }
 
 export async function getServer(env: Env, orgId: string, id: string): Promise<McpServerRow | null> {

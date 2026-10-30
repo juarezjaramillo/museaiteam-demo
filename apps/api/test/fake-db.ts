@@ -23,6 +23,8 @@ export interface FakeTables {
   teams: Row[];
   seats: Row[];
   seat_mail: Row[];
+  seat_credentials: Row[];
+  seat_tools: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -43,6 +45,8 @@ export function blankTables(): FakeTables {
     teams: [],
     seats: [],
     seat_mail: [],
+    seat_credentials: [],
+    seat_tools: [],
   };
 }
 
@@ -118,6 +122,10 @@ export class FakeDB {
           if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ? AND id = ?")) {
             return ((t.mcp_servers.find((r) => r.org_id === p[0] && r.id === p[1]) as T) ?? null);
           }
+          if (q.startsWith("SELECT id FROM mcp_servers WHERE org_id = ? AND id = ?")) {
+            const r = t.mcp_servers.find((x) => x.org_id === p[0] && x.id === p[1]);
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT id FROM mcp_servers WHERE org_id = ? AND url = ?")) {
             const r = t.mcp_servers.find((x) => x.org_id === p[0] && x.url === p[1]);
             return ((r ? { id: r.id } : null) as T) ?? null;
@@ -155,6 +163,16 @@ export class FakeDB {
             const team = s ? t.teams.find((x) => x.id === s.team_id) : null;
             return ((s && team ? { id: s.id, org_id: team.org_id } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT id FROM seats WHERE team_id = ? AND role = ? AND approved = 1")) {
+            const r = t.seats.find((x) => x.team_id === p[0] && x.role === p[1] && x.approved === 1);
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT secret_enc, kind, status FROM seat_credentials")) {
+            const r = t.seat_credentials.find(
+              (x) => x.org_id === p[0] && x.seat_id === p[1] && x.tool === p[2],
+            );
+            return ((r ? { secret_enc: r.secret_enc, kind: r.kind, status: r.status } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT id FROM seat_mail WHERE seat_id = ? AND message_id = ?")) {
             const r = t.seat_mail.find((x) => x.seat_id === p[0] && x.message_id === p[1]);
             return ((r ? { id: r.id } : null) as T) ?? null;
@@ -175,6 +193,12 @@ export class FakeDB {
                 .slice(-20)
                 .map((r) => ({ lineup: r.lineup })) as T[],
             };
+          }
+          if (q.startsWith("SELECT mcp_server_id FROM seat_tools WHERE seat_id = ?")) {
+            return { results: t.seat_tools.filter((r) => r.seat_id === p[0]) as T[] };
+          }
+          if (q.startsWith("SELECT tool, kind, login_user, status, updated_at FROM seat_credentials")) {
+            return { results: t.seat_credentials.filter((r) => r.seat_id === p[0]) as T[] };
           }
           if (q.startsWith("SELECT id, from_addr, subject, substr(body, 1, 2000) AS body, read_at, created_at FROM seat_mail")) {
             const unreadOnly = q.includes("AND read_at IS NULL");
@@ -412,6 +436,45 @@ export class FakeDB {
           if (q.startsWith("UPDATE mcp_credentials SET secret_enc = ?")) {
             const r = t.mcp_credentials.find((x) => x.org_id === p[1] && x.server_id === p[2]);
             if (r) r.secret_enc = p[0];
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO seat_credentials")) {
+            const [id, org_id, seat_id, tool, kind, login_user, secret_enc] = p as string[];
+            t.seat_credentials = t.seat_credentials.filter(
+              (x) => !(x.seat_id === seat_id && x.tool === tool),
+            );
+            t.seat_credentials.push({ id, org_id, seat_id, tool, kind, login_user, secret_enc, status: "ok" });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM seat_credentials WHERE org_id = ? AND seat_id = ? AND tool = ?")) {
+            const n = t.seat_credentials.length;
+            t.seat_credentials = t.seat_credentials.filter(
+              (x) => !(x.org_id === p[0] && x.seat_id === p[1] && x.tool === p[2]),
+            );
+            return { meta: { changes: n - t.seat_credentials.length } };
+          }
+          if (q.startsWith("DELETE FROM seat_credentials WHERE org_id = ? AND seat_id = ?")) {
+            const n = t.seat_credentials.length;
+            t.seat_credentials = t.seat_credentials.filter(
+              (x) => !(x.org_id === p[0] && x.seat_id === p[1]),
+            );
+            return { meta: { changes: n } };
+          }
+          if (q.startsWith("DELETE FROM seat_tools WHERE seat_id = ? AND mcp_server_id = ?")) {
+            const n = t.seat_tools.length;
+            t.seat_tools = t.seat_tools.filter(
+              (x) => !(x.seat_id === p[0] && x.mcp_server_id === p[1]),
+            );
+            return { meta: { changes: n - t.seat_tools.length } };
+          }
+          if (q.startsWith("DELETE FROM seat_tools WHERE seat_id = ?")) {
+            t.seat_tools = t.seat_tools.filter((x) => x.seat_id !== p[0]);
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT OR IGNORE INTO seat_tools")) {
+            if (!t.seat_tools.some((x) => x.seat_id === p[0] && x.mcp_server_id === p[1])) {
+              t.seat_tools.push({ seat_id: p[0], mcp_server_id: p[1] });
+            }
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO seat_mail")) {

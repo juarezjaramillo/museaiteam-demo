@@ -70,7 +70,7 @@ import { reportError } from "./report.js";
 import { getProviderConfig, loadToken } from "./oauth.js";
 import {
   callTool,
-  listServers,
+  listServersForSeat,
   probeServerRow,
   tagsForUrl,
   type McpServerRow,
@@ -99,6 +99,7 @@ import { addFeedback } from "./feedback.js";
 import { executeRevert } from "./revert.js";
 import { chargeIdea } from "./allowance.js";
 import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
+import { hireToken, seatForRole } from "./seat-creds.js";
 
 export interface GoalRunParams {
   runId: string;
@@ -600,7 +601,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     rationale: string,
     plan: string,
   ): Promise<void> {
-    const token = await loadToken(this.env, orgId, "github");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "github");
     if (!token) {
       await this.recordAction(runId, "github.code_pr", "code-pr", "skipped", undefined, {
         reason: "not_connected",
@@ -689,7 +691,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     decision: string,
     rationale: string,
   ): Promise<void> {
-    const token = await loadToken(this.env, orgId, "linear");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "linear");
     if (!token) {
       await this.recordAction(runId, "linear.manage_issue", "issue", "skipped", undefined, {
         reason: "not_connected",
@@ -829,7 +832,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       return;
     }
     if (!payload.issueId || !payload.teamId) return;
-    const token = await loadToken(this.env, orgId, "linear");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "linear");
     if (!token) return;
     try {
       if ((await checkGuard(this.env, orgId, "pm", "linear", "comment")).allowed) {
@@ -854,7 +858,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     runId: string,
     text: string,
   ): Promise<void> {
-    const token = await loadToken(this.env, orgId, "slack");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "slack");
     if (!token) {
       await this.recordAction(runId, "slack.post_message", "message", "skipped", undefined, {
         reason: "not_connected",
@@ -950,7 +955,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     if (!payload.channel || !payload.ts) return;
     if (!(await checkGuard(this.env, orgId, "marketer", "slack", "thread")).allowed) return;
     if (await this.closeoutDone(runId, "closeout:slack")) return;
-    const token = await loadToken(this.env, orgId, "slack");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "slack");
     if (!token) return;
     try {
       const ts = await replyToThread(token, payload.channel, payload.ts, summary);
@@ -981,7 +987,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     decision: string,
     short: string,
   ): Promise<void> {
-    const token = await loadToken(this.env, orgId, "shopify");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "shopify");
     if (!token) {
       await this.recordAction(runId, "shopify.targeted_discount", "discount", "skipped", undefined, {
         reason: "not_connected",
@@ -1088,7 +1095,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     body: string,
     decision: string,
   ): Promise<void> {
-    const token = await loadToken(this.env, orgId, "hubspot");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "hubspot");
     if (!token) {
       await this.recordAction(runId, "hubspot.update_ticket", "ticket", "skipped", undefined, {
         reason: "not_connected",
@@ -1264,7 +1272,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     paragraphs: string[],
     followups: string[],
   ): Promise<void> {
-    const token = await loadToken(this.env, orgId, "notion");
+    const teamId = (await getRun(this.env, runId))?.team_id ?? null;
+    const token = await hireToken(this.env, orgId, teamId, "notion");
     if (!token) {
       await this.recordAction(runId, "notion.run_page", "page", "skipped", undefined, {
         reason: "not_connected",
@@ -1448,14 +1457,17 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       .bind(runId)
       .first<{ id: string }>();
     if (prior) return;
-    const servers = (await listServers(this.env, orgId)).filter(
+    // The loop runs as the analyst seat: its bindings bound the shelf.
+    const runTeam = (await getRun(this.env, runId))?.team_id ?? null;
+    const loopSeat = runTeam ? await seatForRole(this.env, runTeam, "analyst") : null;
+    const servers = (await listServersForSeat(this.env, orgId, loopSeat)).filter(
       (s) => s.status === "trusted" || s.status === "pending",
     );
     if (!servers.length) return;
     const shelf: Array<{ server: McpServerRow; tools: McpTool[] }> = [];
     for (const server of servers) {
       try {
-        const probe = await probeServerRow(this.env, server);
+        const probe = await probeServerRow(this.env, server, loopSeat);
         shelf.push({ server, tools: probe.tools });
       } catch (err) {
         await audit(this.env, runId, "workflow", "mcp.server_unreachable", {
@@ -1562,7 +1574,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           return;
         }
         try {
-          const result = await callTool(this.env, found.server, tool.name, args);
+          const result = await callTool(this.env, found.server, tool.name, args, loopSeat);
           executed++;
           await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "done", undefined, {
             server: found.server.name,

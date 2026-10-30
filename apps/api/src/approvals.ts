@@ -11,6 +11,7 @@ import type { Env } from "./bindings.js";
 import { audit, getRun, touchRun } from "./db.js";
 import { addEvent, getGoal } from "./goals.js";
 import { callTool, getServer, setTrust, type McpServerRow } from "./mcp.js";
+import { seatForRole } from "./seat-creds.js";
 import { notify } from "./notify.js";
 import { createWorkRun, settleFailedRun } from "./staffing.js";
 
@@ -565,7 +566,10 @@ export async function decideToolApproval(
     args = {};
   }
   try {
-    const result = await callTool(env, server, row.mcp_tool, args);
+    const loopSeat = run.team_id
+      ? await seatForRole(env, run.team_id, "analyst").catch(() => null)
+      : null;
+    const result = await callTool(env, server, row.mcp_tool, args, loopSeat);
     const payload = {
       server: server.name,
       tool: row.mcp_tool,

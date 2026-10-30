@@ -1,6 +1,7 @@
 import type { Env } from "./bindings.js";
-import { audit } from "./db.js";
-import { getProviderConfig, loadToken } from "./oauth.js";
+import { audit, getRun } from "./db.js";
+import { getProviderConfig } from "./oauth.js";
+import { hireToken } from "./seat-creds.js";
 import { closePlanPr } from "./integrations/github.js";
 import { deleteIssue } from "./integrations/linear.js";
 import { deleteMessage } from "./integrations/slack.js";
@@ -59,6 +60,8 @@ export async function executeRevert(
   orgId: string,
   runId: string,
 ): Promise<{ reverted: string[]; failed: Array<{ id: string; error: string }> }> {
+  // Reverts run as the author's seat: same identity that made the mess.
+  const teamId = (await getRun(env, runId))?.team_id ?? null;
   const rows = await env.DB.prepare(
     "SELECT id, kind, target, revert_payload FROM actions WHERE run_id = ? AND status = 'done' ORDER BY rowid DESC",
   )
@@ -78,7 +81,7 @@ export async function executeRevert(
     try {
       const rp = JSON.parse(row.revert_payload) as Record<string, unknown>;
       if (row.kind === "github.open_pr" || row.kind === "github.code_pr") {
-        const token = await loadToken(env, orgId, "github");
+        const token = await hireToken(env, orgId, teamId, "github");
         if (!token) throw new Error("github not connected");
         await closePlanPr(
           token,
@@ -87,7 +90,7 @@ export async function executeRevert(
           String(rp.branch),
         );
       } else if (row.kind === "linear.create_issue" || row.kind === "linear.manage_issue") {
-        const token = await loadToken(env, orgId, "linear");
+        const token = await hireToken(env, orgId, teamId, "linear");
         if (!token) throw new Error("linear not connected");
         const subs = Array.isArray(rp.subIds) ? rp.subIds : [];
         for (const sub of subs) {
@@ -109,7 +112,7 @@ export async function executeRevert(
           });
         }
       } else if (row.kind === "slack.post_message" || row.kind === "slack.thread_update") {
-        const token = await loadToken(env, orgId, "slack");
+        const token = await hireToken(env, orgId, teamId, "slack");
         if (!token) throw new Error("slack not connected");
         const replies = Array.isArray(rp.replies) ? rp.replies : [];
         for (const ts of replies) {
@@ -134,7 +137,7 @@ export async function executeRevert(
         row.kind === "shopify.create_discount" ||
         row.kind === "shopify.targeted_discount"
       ) {
-        const token = await loadToken(env, orgId, "shopify");
+        const token = await hireToken(env, orgId, teamId, "shopify");
         if (!token) throw new Error("shopify not connected");
         const { shop } = await getProviderConfig(env, orgId, "shopify");
         if (typeof shop !== "string" || !shop) {
@@ -142,7 +145,7 @@ export async function executeRevert(
         }
         await deleteDiscountCode(shop, token, String(rp.id));
       } else if (row.kind === "shopify.product_copy") {
-        const token = await loadToken(env, orgId, "shopify");
+        const token = await hireToken(env, orgId, teamId, "shopify");
         if (!token) throw new Error("shopify not connected");
         const { shop } = await getProviderConfig(env, orgId, "shopify");
         if (typeof shop !== "string" || !shop) {
@@ -150,26 +153,26 @@ export async function executeRevert(
         }
         await updateProductDescription(shop, token, String(rp.productId), String(rp.priorDescription ?? ""));
       } else if (row.kind === "hubspot.create_note" || row.kind === "hubspot.followup_note") {
-        const token = await loadToken(env, orgId, "hubspot");
+        const token = await hireToken(env, orgId, teamId, "hubspot");
         if (!token) throw new Error("hubspot not connected");
         await deleteNote(token, String(rp.noteId));
       } else if (row.kind === "hubspot.triage_ticket") {
-        const token = await loadToken(env, orgId, "hubspot");
+        const token = await hireToken(env, orgId, teamId, "hubspot");
         if (!token) throw new Error("hubspot not connected");
         await updateTicketContent(token, String(rp.ticketId), String(rp.priorContent ?? ""));
       } else if (row.kind === "hubspot.update_ticket") {
-        const token = await loadToken(env, orgId, "hubspot");
+        const token = await hireToken(env, orgId, teamId, "hubspot");
         if (!token) throw new Error("hubspot not connected");
         await updateTicketFields(token, String(rp.ticketId), {
           ...(rp.priorPriority ? { priority: String(rp.priorPriority) } : {}),
           ...(rp.priorStage ? { stage: String(rp.priorStage) } : {}),
         });
       } else if (row.kind === "notion.create_page") {
-        const token = await loadToken(env, orgId, "notion");
+        const token = await hireToken(env, orgId, teamId, "notion");
         if (!token) throw new Error("notion not connected");
         await archivePage(token, String(rp.pageId));
       } else if (row.kind === "notion.run_page") {
-        const token = await loadToken(env, orgId, "notion");
+        const token = await hireToken(env, orgId, teamId, "notion");
         if (!token) throw new Error("notion not connected");
         if (rp.followupId) {
           try {

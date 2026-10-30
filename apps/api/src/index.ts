@@ -47,6 +47,14 @@ import {
 import { runBaseline } from "./baseline.js";
 import { audit, getRun } from "./db.js";
 import { listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
+import {
+  bindSeatTool,
+  deleteSeatCredential,
+  listSeatCredentials,
+  seatToolIds,
+  setSeatCredential,
+  unbindSeatTool,
+} from "./seat-creds.js";
 import { ingestGitHub, ingestUpload } from "./ingest.js";
 import { listProducts } from "./integrations/shopify.js";
 import {
@@ -1229,6 +1237,74 @@ app.get("/api/orgs/:org/seats/:id/mail", async (c) => {
   if (!org) return c.json({ error: "forbidden" }, 403);
   const mail = await listSeatMail(c.env, org, c.req.param("id"), c.req.query("unread") === "1");
   return c.json({ mail });
+});
+
+app.get("/api/orgs/:org/seats/:id/credentials", async (c) => {
+  const org = await roleOrg(c, ...DECIDERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const creds = await listSeatCredentials(c.env, org, c.req.param("id"));
+  const tools = await seatToolIds(c.env, c.req.param("id"));
+  return c.json({ credentials: creds, tools });
+});
+
+app.put(
+  "/api/orgs/:org/seats/:id/credentials",
+  zValidator(
+    "json",
+    z.object({
+      tool: z.string().min(1).max(120),
+      kind: z.enum(["password", "token", "oauth", "session"]),
+      secret: z.string().min(1).max(4000),
+      loginUser: z.string().max(200).optional(),
+    }),
+  ),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const b = c.req.valid("json");
+    try {
+      await setSeatCredential(c.env, org, c.req.param("id"), {
+        tool: b.tool,
+        kind: b.kind,
+        secret: b.secret,
+        loginUser: b.loginUser,
+      });
+    } catch (err) {
+      return c.json({ error: String(err).slice(0, 120) }, 404);
+    }
+    return c.json({ ok: true });
+  },
+);
+
+app.delete("/api/orgs/:org/seats/:id/credentials/:tool", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const gone = await deleteSeatCredential(c.env, org, c.req.param("id"), c.req.param("tool"));
+  if (!gone) return c.json({ error: "not found" }, 404);
+  return c.json({ ok: true });
+});
+
+app.post(
+  "/api/orgs/:org/seats/:id/tools",
+  zValidator("json", z.object({ serverId: z.string().min(1).max(64) })),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    try {
+      await bindSeatTool(c.env, org, c.req.param("id"), c.req.valid("json").serverId);
+    } catch (err) {
+      return c.json({ error: String(err).slice(0, 120) }, 404);
+    }
+    return c.json({ ok: true });
+  },
+);
+
+app.delete("/api/orgs/:org/seats/:id/tools/:serverId", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const gone = await unbindSeatTool(c.env, org, c.req.param("id"), c.req.param("serverId"));
+  if (!gone) return c.json({ error: "not found" }, 404);
+  return c.json({ ok: true });
 });
 
 app.post("/api/orgs/:org/seats/:id/mail/:mailId/read", async (c) => {
