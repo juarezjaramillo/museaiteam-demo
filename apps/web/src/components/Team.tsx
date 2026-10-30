@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
 import { api, type InviteRow, type MemberRow } from "../api.js";
+import { dateLabel } from "@museaiteam/shared";
+
+const ROLE_WORDS: Record<string, string> = {
+  owner: "Owner",
+  approver: "Approver",
+  viewer: "Viewer",
+};
+
+function memberRole(role: string): string {
+  return ROLE_WORDS[role] ?? role;
+}
 
 export function Team({ org, role }: { org: string; role: string }) {
   const [members, setMembers] = useState<MemberRow[]>([]);
@@ -47,7 +58,7 @@ export function Team({ org, role }: { org: string; role: string }) {
           <li key={m.id}>
             <div className="card-head">
               <strong>{m.email ?? m.id.slice(0, 8)}</strong>
-              <span className="badge soft">{m.role}</span>
+              <span className="badge soft">{memberRole(m.role)}</span>
             </div>
           </li>
         ))}
@@ -62,15 +73,15 @@ export function Team({ org, role }: { org: string; role: string }) {
               onChange={(e) => setEmail(e.target.value)}
             />
             <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
-              <option value="approver">approver</option>
-              <option value="viewer">viewer</option>
+              <option value="approver">Approver — can approve work</option>
+              <option value="viewer">Viewer — can watch</option>
             </select>
             <button className="primary" onClick={invite}>Send invite</button>
           </div>
           <ul className="list">
             {invites.map((i) => (
               <li key={i.id}>
-                {i.email} <span className="dim">{i.role} · ends {i.expiresAt.slice(0, 10)}</span>{" "}
+                {i.email} <span className="dim">{memberRole(i.role)}{dateLabel(i.expiresAt) ? ` · ends ${dateLabel(i.expiresAt)}` : ""}</span>{" "}
                 <button className="link" onClick={() => api.revokeInvite(org, i.id).then(load)}>
                   cancel
                 </button>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
+import { monthLabel } from "@museaiteam/shared";
 
 interface BillingInfo {
   subscribed: boolean;
@@ -57,19 +58,22 @@ export function Billing({ org }: { org: string }) {
       )}
       {info.subscribed ? (
         <p>
-          <span className="badge">subscription active</span>
+          <span className="badge good">Active</span>
         </p>
       ) : (
         <p>
-          {info.pricePerWorker}/worker/month · {info.seats} seats = $
-          {monthly.toLocaleString("en-US")}/month.
+          <span className="badge warn">Trial</span>
         </p>
       )}
+      <p>
+        {info.seats} worker{info.seats === 1 ? "" : "s"} × {info.pricePerWorker} = $
+        {monthly.toLocaleString("en-US")}/month.
+      </p>
       <p className={info.meter.throttled ? "error" : "dim"}>
-        Usage ({info.meter.month || "this month"}):{" "}
+        {monthLabel(info.meter.month) || "This month"}:{" "}
         {info.meter.totalTokens.toLocaleString("en-US")} of{" "}
         {info.meter.allowance.toLocaleString("en-US")} words (
-        {info.meter.perWorker.toLocaleString("en-US")} per worker).
+        {info.meter.perWorker.toLocaleString("en-US")} each).
         {info.meter.throttled && " Slowed to 1 session a day until reset."}
       </p>
       {!info.subscribed &&

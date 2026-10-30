@@ -54,7 +54,7 @@ export function Notifications({
           unread only
         </label>
       </div>
-      <p className="page-sub">Ships, approvals, check-ins, and usage warnings.</p>
+      <p className="page-sub">Results, approvals, check-ins, and usage warnings.</p>
       <ul className="list">
         {fresh.map((n) => (
           <li key={n.id} className={n.read ? "read" : "unread"}>

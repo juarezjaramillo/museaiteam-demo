@@ -4,22 +4,26 @@ import {
   actionLabel,
   approvalKindLabel,
   choiceLabel,
+  dateLabel,
   isHiddenAction,
   isMoneyKind,
   kindLabel,
   modeLabel,
+  monthLabel,
   noticeLabel,
   scheduleLabel,
   sessionTitle,
   shipCount,
   statusLabel,
   targetHref,
+  timeLabel,
 } from "../src/words.ts";
 import { hasInverse, INVERSE } from "../src/undo.ts";
 
 test("labels map internal values to customer words", () => {
-  assert.equal(statusLabel("debating"), "organizing");
-  assert.equal(statusLabel("acting"), "working");
+  assert.equal(statusLabel("debating"), "Organizing");
+  assert.equal(statusLabel("acting"), "Working");
+  assert.equal(statusLabel("awaiting_approval"), "Waiting on you");
   assert.equal(kindLabel("work"), "Work session");
   assert.equal(kindLabel("check"), "Check-in");
   assert.equal(choiceLabel("for"), "agree");
@@ -32,9 +36,20 @@ test("labels map internal values to customer words", () => {
 });
 
 test("unknown values degrade to readable text, never crash", () => {
-  assert.equal(statusLabel("awaiting_approval"), "awaiting approval");
-  assert.equal(actionLabel("acme.future_kind"), "acme future kind");
-  assert.equal(noticeLabel("weird.event"), "weird event");
+  assert.equal(statusLabel("mystery_state"), "Mystery state");
+  assert.equal(actionLabel("acme.future_kind"), "Acme future kind");
+  assert.equal(noticeLabel("weird.event"), "Weird event");
+});
+
+test("dates read like a calendar, garbage reads blank", () => {
+  assert.equal(dateLabel("2026-10-30T14:05:00Z"), "Oct 30, 2026");
+  assert.equal(dateLabel("not-a-date"), "");
+  assert.equal(dateLabel(""), "");
+  assert.equal(timeLabel("2026-10-30T14:05:00Z"), "2:05 PM");
+  assert.equal(timeLabel("2026-10-30T09:00:00Z"), "9:00 AM");
+  assert.equal(timeLabel("2026-10-30"), "");
+  assert.equal(monthLabel("2026-10"), "October 2026");
+  assert.equal(monthLabel("soon"), "soon");
 });
 
 test("session titles lead with the outcome", () => {

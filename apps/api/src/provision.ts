@@ -8,6 +8,7 @@ import {
   isSeatMapRole,
   keyFromHex,
   paidTools,
+  providerLabel,
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { BoxQuota, boxConfigured, provider } from "./box.js";
@@ -131,7 +132,7 @@ export async function seatAskLines(env: Env, seatId: string): Promise<string[]> 
   for (const r of open.results ?? []) {
     try {
       const tools = (JSON.parse(r.tools_json) as unknown[]).filter((t): t is string => typeof t === "string");
-      if (tools.length > 0) lines.push(`asked the founder for: ${tools.join(", ")} (waiting on approval)`);
+      if (tools.length > 0) lines.push(`asked the founder for: ${tools.map(providerLabel).join(", ")} (waiting on approval)`);
     } catch {
       /* ignore */
     }
@@ -194,8 +195,8 @@ export async function askForSeats(
   const paid = paidTools(merged);
   await notify(env, orgId, {
     kind: "seat.requested",
-    title: `${hireDisplayName(seat.role)} asked for ${fresh.join(", ")}`.slice(0, 120),
-    body: `${reason.slice(0, 200)}${paid.length > 0 ? ` Paid seats in the card: ${paid.join(", ")}.` : ""}`,
+    title: `${hireDisplayName(seat.role)} asked for ${fresh.map(providerLabel).join(", ")}`.slice(0, 120),
+    body: `${reason.slice(0, 200)}${paid.length > 0 ? ` Paid seats in the card: ${paid.map(providerLabel).join(", ")}.` : ""}`,
   });
   await audit(env, null, "system", "seat.asked", { org: orgId, seat: seatId, tools: fresh });
   return { requestId, filed: fresh };
@@ -273,8 +274,8 @@ export async function requestSeats(
   const paid = paidTools(asks);
   await notify(env, orgId, {
     kind: "seat.requested",
-    title: `Seats for ${seat.role}: ${asks.length} tools`.slice(0, 120),
-    body: paid.length > 0 ? `Includes paid seats: ${paid.join(", ")}. Approve all at once.` : "All free tools. Approve all at once.",
+    title: `Seats for ${hireDisplayName(seat.role)}: ${asks.length} tools`.slice(0, 120),
+    body: paid.length > 0 ? `Includes paid seats: ${paid.map(providerLabel).join(", ")}. Approve all at once.` : "All free tools. Approve all at once.",
   });
   await audit(env, null, "system", "seat.requested", { org: orgId, seat: seatId, tools: asks.length });
   return { id, seat_id: seatId, tools: asks, status: "proposed", created_at: "" };
@@ -333,8 +334,8 @@ export async function decideSeatRequest(
     const seat = await getSeat(env, orgId, row.seat_id).catch(() => null);
     await notify(env, orgId, {
       kind: "seat.requested",
-      title: `Seat asks denied for ${seat?.role ?? "hire"} — planning around them`.slice(0, 120),
-      body: `Denied: ${tools.join(", ")}. The hire will work without these.`,
+      title: `Seat asks denied for ${seat ? hireDisplayName(seat.role) : "hire"} — planning around them`.slice(0, 120),
+      body: `Denied: ${tools.map(providerLabel).join(", ")}. The hire will work without these.`,
     });
   }
   return "ok";

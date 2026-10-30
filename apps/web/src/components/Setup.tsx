@@ -6,6 +6,7 @@ import {
   WRITE_SCOPES,
   isKnownProvider,
   providerLabel,
+  roleLabel,
   scopeLabel,
 } from "@museaiteam/shared";
 import { api, type GuardrailRow, type McpCatalogEntry, type McpServer, type TeamRow } from "../api.js";
@@ -74,7 +75,7 @@ function GuardEditor({
   return (
     <tr>
       <td>
-        <span className={`role role-${row.worker_role}`}>{row.worker_role}</span>
+        <span className={`role role-${row.worker_role}`}>{roleLabel(row.worker_role)}</span>
         {!row.configured && <span className="dim"> · default</span>}
       </td>
       <td>
@@ -642,7 +643,7 @@ function TeamStep({
           <strong>{t.name}</strong>{" "}
           {t.seats.map((s) => (
             <span key={s.id}>
-              <span className={`role role-${s.role}`}>{s.role}</span>
+              <span className={`role role-${s.role}`}>{roleLabel(s.role)}</span>
               {s.approved ? (
                 <span className="badge soft">active</span>
               ) : (
@@ -657,7 +658,7 @@ function TeamStep({
             >
               {SEAT_ROLES.map((r) => (
                 <option key={r} value={r}>
-                  {r.slice(0, 1).toUpperCase() + r.slice(1)}
+                  {roleLabel(r)}
                 </option>
               ))}
             </select>
@@ -700,7 +701,7 @@ function LimitCard({
   return (
     <div className="conn-row">
       <div>
-        <span className={`role role-${row.worker_role}`}>{row.worker_role}</span>{" "}
+        <span className={`role role-${row.worker_role}`}>{roleLabel(row.worker_role)}</span>{" "}
         {!row.configured ? (
           <span className="dim">safe defaults</span>
         ) : (

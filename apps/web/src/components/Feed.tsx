@@ -1,5 +1,5 @@
 import type { FeedEvent, Proposal } from "@museaiteam/shared";
-import { actionLabel, choiceLabel, statusLabel } from "@museaiteam/shared";
+import { actionLabel, choiceLabel, crewName, roleLabel, statusLabel } from "@museaiteam/shared";
 
 function tallyFor(proposalId: string, events: FeedEvent[]) {
   let fors = 0;
@@ -34,7 +34,7 @@ export function Feed({ events }: { events: FeedEvent[] }) {
             <li key={i} className="card proposal">
               <div className="card-head">
                 <span className={`role role-${e.proposal.agentRole}`}>
-                  {e.proposal.agentRole}
+                  {roleLabel(e.proposal.agentRole)}
                 </span>
                 <strong>{e.proposal.title}</strong>
               </div>
@@ -62,13 +62,13 @@ export function Feed({ events }: { events: FeedEvent[] }) {
           return (
             <li key={i} className="vote">
               <span className={`role role-${e.vote.agentRole}`}>
-                {e.vote.agentRole}
+                {roleLabel(e.vote.agentRole)}
               </span>
               <span className={`choice choice-${e.vote.choice}`}>
                 {choiceLabel(e.vote.choice)}
               </span>
               <span className="dim">
-                {p ? `${p.agentRole}'s “${p.title}”` : e.vote.proposalId}
+                {p ? `${crewName(p.agentRole)}'s “${p.title}”` : e.vote.proposalId}
               </span>
               <div className="reason">{e.vote.reason}</div>
             </li>
@@ -79,7 +79,7 @@ export function Feed({ events }: { events: FeedEvent[] }) {
             <li key={i} className="card ruling">
               <div className="card-head">
                 <span className="badge">
-                  decision · {e.ruling.decidedBy}
+                  decision · {crewName(e.ruling.decidedBy)}
                 </span>
               </div>
               <strong>{e.ruling.decision}</strong>

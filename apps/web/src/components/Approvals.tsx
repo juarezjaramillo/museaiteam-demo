@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { hireDisplayName } from "@museaiteam/shared";
 import { api, type ApprovalRow, type ProposalRow } from "../api.js";
-import { actionLabel, approvalKindLabel, statusLabel } from "@museaiteam/shared";
+import { actionLabel, approvalKindLabel, dateLabel, providerLabel, statusLabel, timeLabel } from "@museaiteam/shared";
 
 const OUTCOME_WORDS: Record<string, string> = {
   approved: "Approved",
@@ -42,14 +42,14 @@ function SeatAskCard({ org, ask, done }: { org: string; ask: SeatAsk; done: () =
       <div className="card-head">
         <strong>{hireDisplayName(ask.role)}</strong>
         <span className="dim">{ask.email ?? ""}</span>
-        {ask.paid.length > 0 && <span className="badge warn">paid: {ask.paid.join(", ")}</span>}
+        {ask.paid.length > 0 && <span className="badge warn">paid: {ask.paid.map(providerLabel).join(", ")}</span>}
       </div>
       <ul className="list">
         {ask.tools.map((t) => (
           <li key={t}>
             <label className="ask-tool">
               <input type="checkbox" checked={!off.includes(t)} onChange={() => toggle(t)} />
-              <span>{t}</span>
+              <span>{providerLabel(t)}</span>
               {ask.paid.includes(t) && <span className="dim">(paid seat)</span>}
             </label>
           </li>
@@ -172,10 +172,12 @@ export function Approvals({
           <label>
             Status
             <select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="">all</option>
-              <option value="pending">pending</option>
-              <option value="approved">approved</option>
-              <option value="rejected">rejected</option>
+              <option value="">All</option>
+              {["pending", "approved", "rejected"].map((s) => (
+                <option key={s} value={s}>
+                  {statusLabel(s)}
+                </option>
+              ))}
             </select>
           </label>
           {pendCount > 1 && (
@@ -211,7 +213,7 @@ export function Approvals({
                 {p.kind === "signup" ? (
                   <p className="dim">This one waits for you — it never starts on its own.</p>
                 ) : (
-                  <p className="dim">Starts on its own {p.start_at.slice(5, 16).replace("T", " ")} unless you answer.</p>
+                  <p className="dim">Starts on its own {dateLabel(p.start_at)}{timeLabel(p.start_at) ? ` at ${timeLabel(p.start_at)}` : ""} unless you answer.</p>
                 )}
                 <div className="row">
                   <button
@@ -233,7 +235,7 @@ export function Approvals({
         </section>
       )}
       <label>
-        Note{" "}
+        Note for your decision below{" "}
         <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" />
       </label>
       <ul className="list">
@@ -245,7 +247,7 @@ export function Approvals({
               {a.resubmits > 0 ? ` · ${a.resubmits} retr${a.resubmits === 1 ? "y" : "ies"}` : ""}
             </span>{" "}
             <button className="link" onClick={() => onRun(a.runId)}>
-              {a.runId.slice(0, 8)}
+              open session
             </button>
             {a.actionKind && (
               <span className="dim">

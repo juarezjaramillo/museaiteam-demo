@@ -144,7 +144,7 @@ describe("provisioning", () => {
     const first = await askForSeats(e, "org1", "s1", ["figma"], "need it");
     expect(first.filed).toEqual(["figma"]);
     expect(first.requestId).toBeTruthy();
-    expect(tables.notifications.some((n) => String(n.title).includes("asked for figma"))).toBe(true);
+    expect(tables.notifications.some((n) => String(n.title).includes("asked for Figma"))).toBe(true);
     // Repeat asks nothing; merge adds the new tool to the same card.
     const repeat = await askForSeats(e, "org1", "s1", ["figma"], "need it");
     expect(repeat).toEqual({ requestId: first.requestId, filed: [] });
@@ -156,7 +156,7 @@ describe("provisioning", () => {
     expect((await askForSeats(e, "org1", "s1", ["slack"], "x")).filed).toEqual([]);
     // Brief lines show the open ask and the provisioning seat.
     const lines = await seatAskLines(e, "s1");
-    expect(lines.some((l) => l.includes("figma") && l.includes("notion"))).toBe(true);
+    expect(lines.some((l) => l.includes("Figma") && l.includes("Notion"))).toBe(true);
     expect(lines.some((l) => l.startsWith("slack:"))).toBe(true);
   });
 
@@ -192,6 +192,6 @@ describe("provisioning", () => {
     expect(await decideSeatRequest(e, "org1", req.id, "u1", false)).toBe("ok");
     const note = tables.notifications.find((n) => n.kind === "seat.requested" && String(n.title).includes("denied"));
     expect(note).toBeTruthy();
-    expect(String(note?.body)).toMatch(/github/);
+    expect(String(note?.body)).toMatch(/GitHub/);
   });
 });

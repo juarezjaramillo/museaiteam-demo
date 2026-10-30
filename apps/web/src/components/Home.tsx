@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type ActivityItem, type ApprovalRow, type GoalRow, type NotificationRow } from "../api.js";
-import { actionLabel, statusLabel, targetHref } from "@museaiteam/shared";
+import { actionLabel, dateLabel, statusLabel, targetHref, timeLabel } from "@museaiteam/shared";
 
 /** One row per entity: alerts sharing a link are the same thing. */
 function dedupeAlerts(rows: NotificationRow[]): NotificationRow[] {
@@ -110,12 +110,14 @@ export function Home({
           <ul className="list">
             {shipped.map((a) => {
               const href = targetHref(a.target);
+              const when = [dateLabel(a.createdAt), timeLabel(a.createdAt)].filter(Boolean).join(" · ");
               return (
                 <li key={a.id}>
-                  <strong>{actionLabel(a.kind)}</strong>{" "}
-                  <span className="dim">for {a.goal.slice(0, 60)}</span>
+                  <strong>{a.target.slice(0, 120)}</strong>
                   <div className="dim">
-                    {a.createdAt.slice(5, 16).replace("T", " ")} ·{" "}
+                    {actionLabel(a.kind)}
+                    {a.goal ? ` for ${a.goal.slice(0, 60)}` : ""}
+                    {when ? ` · ${when}` : ""} ·{" "}
                     <button className="link" onClick={() => onRun(a.runId)}>open session</button>
                     {href && (
                       <>
@@ -145,6 +147,12 @@ export function Home({
                   <button className="link" onClick={() => onGoal(g.id)}>{g.title}</button>
                   <span className={`status status-${g.status}`}>{statusLabel(g.status)}</span>
                 </div>
+                {g.metric_target != null && g.metric_name && (
+                  <span className="dim">
+                    {g.metric_baseline != null ? `${g.metric_baseline} → ` : "aiming for "}
+                    {g.metric_target} {g.metric_name}
+                  </span>
+                )}
               </li>
             ))}
           </ul>

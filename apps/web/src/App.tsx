@@ -89,12 +89,11 @@ export function App() {
   >(null);
   const [me, setMe] = useState<{ email?: string } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [goal, setGoal] = useState("Lift onboarding activation by 15%");
-  const [metricName, setMetricName] = useState("activation_rate");
-  const [baseline, setBaseline] = useState("0.32");
-  const [target, setTarget] = useState("0.37");
+  const [goal, setGoal] = useState("");
+  const [metricName, setMetricName] = useState("");
+  const [baseline, setBaseline] = useState("");
+  const [target, setTarget] = useState("");
   const [timebox, setTimebox] = useState("14");
-  const [windowSecs, setWindowSecs] = useState("60");
   const [wizardOpen, setWizardOpen] = useState(
     () => localStorage.getItem("wizard-done") !== "1",
   );
@@ -216,7 +215,7 @@ export function App() {
         metricBaseline: num(baseline),
         metricTarget: num(target),
         timeboxDays: num(timebox),
-        voteWindowMs: Math.max(5, Number(windowSecs) || 60) * 1000,
+        voteWindowMs: 60_000,
       });
       setRunId(id);
       setRun(null);
@@ -421,27 +420,23 @@ export function App() {
                     </label>
                   </div>
                 )}
-                <input className="goal" value={goal} onChange={(e) => setGoal(e.target.value)} />
+                <input className="goal" placeholder="What should the team do? (8+ characters)" value={goal} onChange={(e) => setGoal(e.target.value)} />
                 <div className="row">
                   <label>
-                    Number <input value={metricName} onChange={(e) => setMetricName(e.target.value)} />
+                    Number <input value={metricName} onChange={(e) => setMetricName(e.target.value)} placeholder="e.g. trial activations" />
                   </label>
                 </div>
                 <details>
                   <summary>More options</summary>
                   <div className="row">
                     <label>
-                      Start <input className="narrow" value={baseline} onChange={(e) => setBaseline(e.target.value)} />
+                      Start <input className="narrow" type="number" value={baseline} onChange={(e) => setBaseline(e.target.value)} />
                     </label>
                     <label>
-                      Aim for <input className="narrow" value={target} onChange={(e) => setTarget(e.target.value)} />
+                      Aim for <input className="narrow" type="number" value={target} onChange={(e) => setTarget(e.target.value)} />
                     </label>
                     <label>
-                      Days <input className="narrow" value={timebox} onChange={(e) => setTimebox(e.target.value)} />
-                    </label>
-                    <label>
-                      Think time (sec){" "}
-                      <input className="narrow" value={windowSecs} onChange={(e) => setWindowSecs(e.target.value)} />
+                      Days <input className="narrow" type="number" min={1} value={timebox} onChange={(e) => setTimebox(e.target.value)} />
                     </label>
                   </div>
                 </details>

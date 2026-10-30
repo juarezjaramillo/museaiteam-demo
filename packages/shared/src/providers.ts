@@ -69,9 +69,11 @@ export function scopeLabel(id: string): string {
   return SCOPE_LABELS[id] ?? id;
 }
 
-/** Plain-words label for a provider id; unknown ids pass through. */
+/** Plain-words label for a provider id; unknown ids capitalize (they are product names). */
 export function providerLabel(id: string): string {
-  return isKnownProvider(id) ? PROVIDER_LABELS[id] : id;
+  if (isKnownProvider(id)) return PROVIDER_LABELS[id];
+  if (id.startsWith("mcp:")) return "Custom tool";
+  return id.slice(0, 1).toUpperCase() + id.slice(1);
 }
 
 /**

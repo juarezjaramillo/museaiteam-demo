@@ -4,6 +4,7 @@ import { ThumbDown, ThumbUp } from "./icons.js";
 import {
   actionLabel,
   crewName,
+  dateLabel,
   isHiddenAction,
   kindLabel,
   ownerFor,
@@ -11,6 +12,7 @@ import {
   shipCount,
   statusLabel,
   targetHref,
+  timeLabel,
   type Proof,
 } from "@museaiteam/shared";
 
@@ -124,7 +126,7 @@ export function RunDetailView({
       <div className="row">
         <span className={`status status-${d.run.status}`}>{statusLabel(d.run.status)}</span>
         <span className="dim">{kindLabel(d.run.kind)}</span>
-        <span className="dim">{d.run.tokens_used.toLocaleString()} tokens</span>
+        <span className="dim">{d.run.tokens_used.toLocaleString()} words</span>
       </div>
       <p>{d.run.goal}</p>
       {d.run.brief_note.startsWith("Metric trigger:") && (
@@ -139,7 +141,7 @@ export function RunDetailView({
         <p><span className="dim">Results — </span>{ships}</p>
         <p><span className="dim">Next — </span>{next}</p>
         {d.run.self_critique && (
-          <p><span className="dim">Morgan's take — </span>{d.run.self_critique}</p>
+          <p><span className="dim">{crewName("manager")}'s take — </span>{d.run.self_critique}</p>
         )}
         {(d.reviews ?? []).map((r, i) => (
           <p key={i}>
@@ -242,7 +244,7 @@ export function RunDetailView({
             {d.children.map((c) => (
               <li key={c.id}>
                 <button className="link" onClick={() => onRun(c.id)}>
-                  {c.id.slice(0, 8)}
+                  Open session
                 </button>{" "}
                 <span className="dim">
                   {kindLabel(c.kind)} · {statusLabel(c.status)}
@@ -280,13 +282,12 @@ export function Runs({
         <label>
           Status
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">all</option>
-            <option value="open">open</option>
-            <option value="queued">queued</option>
-            <option value="awaiting_approval">awaiting approval</option>
-            <option value="done">done</option>
-            <option value="failed">failed</option>
-            <option value="halted">halted</option>
+            <option value="">All</option>
+            {["open", "queued", "awaiting_approval", "done", "failed", "halted"].map((s) => (
+              <option key={s} value={s}>
+                {statusLabel(s)}
+              </option>
+            ))}
           </select>
         </label>
       </div>
@@ -309,8 +310,14 @@ export function Runs({
                   <span className={`status status-${r.status}`}>{statusLabel(r.status)}</span>
                 </div>
                 <span className="dim">
-                  {kindLabel(r.kind)} · {r.created_at.slice(0, 16)} ·{" "}
-                  {r.ships > 0 ? shipCount(r.ships) : "no results yet"}
+                  {kindLabel(r.kind)}
+                  {dateLabel(r.created_at) ? ` · ${dateLabel(r.created_at)}` : ""}
+                  {timeLabel(r.created_at) ? ` · ${timeLabel(r.created_at)}` : ""} ·{" "}
+                  {r.ships > 0
+                    ? shipCount(r.ships)
+                    : r.kind === "propose" && r.status === "done"
+                      ? "proposal ready"
+                      : "no results yet"}
                 </span>
                 {titled && <p className="dim">{r.goal.replace(/^Check:\s*/, "").slice(0, 120)}</p>}
               </li>

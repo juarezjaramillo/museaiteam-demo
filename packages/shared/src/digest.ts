@@ -39,7 +39,7 @@ export function buildDigest(input: DigestInput): Digest {
     }
     lines.push("");
   } else {
-    lines.push("Everything shipped — no pending actions.", "");
+    lines.push("Everything done — no pending actions.", "");
   }
   lines.push(`See it here: ${input.appUrl}`);
   return { subject: `[AI Team] ${headline.slice(0, 80)}`, text: lines.join("\n") };

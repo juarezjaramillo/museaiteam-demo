@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { PROVIDER_IDS, PROVIDER_LABELS, crewName, hireDisplayName, paidTools, toolForServer } from "@museaiteam/shared";
+import { PROVIDER_IDS, PROVIDER_LABELS, crewName, dateLabel, hireDisplayName, paidTools, providerLabel, roleLabel, toolForServer } from "@museaiteam/shared";
 import { api, type HireRow, type McpServer } from "../api.js";
 import { ThumbDown, ThumbUp } from "./icons.js";
 
@@ -236,7 +236,7 @@ function HireCard({
         <span className={`avatar role-${s.role}`}>{crewName(s.role).slice(0, 1)}</span>
         <span className="hire-id">
           <strong>{hireDisplayName(s.role)}</strong>
-          <span className="dim">{s.role} · {s.email ?? "no inbox yet"}</span>
+          <span className="dim">{roleLabel(s.role)} · {s.email ?? "no inbox yet"}</span>
         </span>
         <span className={`badge ${st.kind === "working" ? "good" : st.kind === "readying" ? "soft" : "warn"}`}>{st.label}</span>
         {primary()}
@@ -277,21 +277,21 @@ function HireCard({
         <div className="hire-detail">
           {s.request?.status === "proposed" && (
             <p>
-              Asked for: {s.request.tools.join(", ")}
-              {s.request.paid.length > 0 && <span className="dim"> (paid seats: {s.request.paid.join(", ")})</span>}{" "}
+              Asked for: {s.request.tools.map(providerLabel).join(", ")}
+              {s.request.paid.length > 0 && <span className="dim"> (paid seats: {s.request.paid.map(providerLabel).join(", ")})</span>}{" "}
               <a href="#/approvals">pick tools</a>
             </p>
           )}
           {lost.length > 0 && (
             <p>
-              {lost.map((l) => l.tool).join(", ")} stopped working.{" "}
+              {lost.map((l) => providerLabel(l.tool)).join(", ")} stopped working.{" "}
               {role === "owner" ? "Paste a fresh login below." : "Ask the owner for a fresh login."}
             </p>
           )}
-          {s.on.length > 0 && <p>Ready: {s.on.join(", ")}</p>}
+          {s.on.length > 0 && <p>Ready: {s.on.map(providerLabel).join(", ")}</p>}
           {s.waiting.map((w) => (
             <p key={w.tool} className="dim">
-              {w.tool} — {w.detail || w.status}{" "}
+              {providerLabel(w.tool)} — {w.detail || w.status}{" "}
               {role === "owner" && <RelayForm org={org} seatId={s.id} tool={w.tool} done={reload} />}
             </p>
           ))}
@@ -299,7 +299,7 @@ function HireCard({
             <p className="dim">
               Logins: {s.logins.map((l) => (
                 <span key={l.tool}>
-                  {l.tool} ({l.status === "ok" ? (l.expires ? `ok till ${l.expires.slice(0, 10)}` : "ok") : l.status}){" "}
+                  {providerLabel(l.tool)} ({l.status === "ok" ? (dateLabel(l.expires) ? `ok till ${dateLabel(l.expires)}` : "ok") : l.status}){" "}
                 </span>
               ))}
             </p>
@@ -452,7 +452,7 @@ export function Hires({ org, role }: { org: string; role: string }) {
         <tbody>
           {hires.map((h) => (
             <tr key={h.role}>
-              <td><span className={`role role-${h.role}`}>{h.role}</span></td>
+              <td><span className={`role role-${h.role}`}>{roleLabel(h.role)}</span></td>
               <td>{h.runs}</td>
               <td>{h.proposals}</td>
               <td>{h.votes}</td>

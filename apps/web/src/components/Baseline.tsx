@@ -40,7 +40,7 @@ export function Baseline({
         {data && (
           <span className="meter">
             one try {data.tokens.toLocaleString()} words vs team{" "}
-            {teamTokens.toLocaleString()}
+            {teamTokens.toLocaleString()} words
             {!data.fresh && " · saved"}
           </span>
         )}

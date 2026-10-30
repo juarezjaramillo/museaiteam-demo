@@ -5,18 +5,20 @@
  */
 
 function pretty(raw: string): string {
-  return raw.replace(/[_.]/g, " ");
+  const s = raw.replace(/[_.]/g, " ");
+  return s.slice(0, 1).toUpperCase() + s.slice(1);
 }
 
 const STATUS_WORDS: Record<string, string> = {
-  debating: "organizing",
-  acting: "working",
-  open: "new",
-  queued: "waiting",
-  pending: "waiting",
-  halted: "stopped",
-  vetoed: "rejected",
-  would_do: "sample",
+  debating: "Organizing",
+  acting: "Working",
+  open: "New",
+  queued: "Waiting",
+  pending: "Waiting",
+  halted: "Stopped",
+  vetoed: "Rejected",
+  would_do: "Sample",
+  awaiting_approval: "Waiting on you",
 };
 
 export function statusLabel(status: string): string {
@@ -44,6 +46,39 @@ const CHOICE_WORDS: Record<string, string> = {
 
 export function choiceLabel(choice: string): string {
   return CHOICE_WORDS[choice] ?? pretty(choice);
+}
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2026-10-30…" → "Oct 30, 2026". Garbage in, "" out — never crash. */
+export function dateLabel(iso: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");
+  if (!m) return "";
+  const mon = MONTH_ABBR[Number(m[2]) - 1];
+  if (!mon) return "";
+  return `${mon} ${Number(m[3])}, ${m[1]}`;
+}
+
+/** "2026-10-30T14:05:…" → "2:05 PM". Garbage in, "" out. */
+export function timeLabel(iso: string | null | undefined): string {
+  const m = /T(\d{2}):(\d{2})/.exec(iso ?? "");
+  if (!m) return "";
+  const h24 = Number(m[1]);
+  if (h24 > 23 || Number(m[2]) > 59) return "";
+  const suffix = h24 < 12 ? "AM" : "PM";
+  const h = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h}:${m[2]} ${suffix}`;
+}
+
+/** "2026-10" → "October 2026". Garbage in, raw out. */
+export function monthLabel(ym: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})$/.exec((ym ?? "").trim());
+  if (!m) return ym ?? "";
+  return `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[1]}`;
 }
 
 const APPROVAL_WORDS: Record<string, string> = {

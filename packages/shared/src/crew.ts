@@ -23,6 +23,25 @@ export function crewName(role: string): string {
   return CREW[role] ?? role;
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  pm: "PM",
+  qa: "QA",
+  manager: "Manager",
+  marketer: "Marketer",
+  engineer: "Engineer",
+  analyst: "Analyst",
+  designer: "Designer",
+  researcher: "Researcher",
+  writer: "Writer",
+  support: "Support",
+  ops: "Ops",
+};
+
+/** Plain-words job title for a seat role; unknown roles capitalize. */
+export function roleLabel(role: string): string {
+  return ROLE_LABELS[role] ?? (role.slice(0, 1).toUpperCase() + role.slice(1));
+}
+
 /**
  * The hire's tagged name, everywhere a customer reads it: sessions,
  * handoffs, offboarding, the Hires page. The (AI) tag is part of the

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type GoalRow, type MetricPoint, type TimelineEntry } from "../api.js";
-import { eventLabel, kindLabel, modeLabel, scheduleLabel, sessionTitle, shipCount, statusLabel } from "@museaiteam/shared";
+import { PULL_CATALOG, dateLabel, eventLabel, kindLabel, modeLabel, providerLabel, roleLabel, scheduleLabel, sessionTitle, shipCount, statusLabel } from "@museaiteam/shared";
 
 function Chart({ series }: { series: MetricPoint[] }) {
   if (series.length === 0) {
@@ -81,14 +81,24 @@ function GoalForm({ org, onDone }: { org: string; onDone: (id: string) => void }
       {error && <p className="error">{error}</p>}
       <input className="goal" placeholder="Goal title (8+ characters)" value={title} onChange={(e) => setTitle(e.target.value)} />
       <div className="row">
-        <label>Number <input value={metric} onChange={(e) => setMetric(e.target.value)} placeholder="activation_rate" /></label>
+        <label>Number <input value={metric} onChange={(e) => setMetric(e.target.value)} placeholder="e.g. trial activations" /></label>
       </div>
       <details>
         <summary>More options</summary>
         <div className="row">
-          <label>Where from <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="auto or manual" /></label>
-          <label>Aim for <input className="narrow" value={target} onChange={(e) => setTarget(e.target.value)} /></label>
-          <label>Deadline <input value={deadline} onChange={(e) => setDeadline(e.target.value)} placeholder="YYYY-MM-DD" /></label>
+          <label>Where from
+            <select value={source} onChange={(e) => setSource(e.target.value)}>
+              <option value="">Auto — guess from the number</option>
+              <option value="manual">I enter it by hand</option>
+              {Object.entries(PULL_CATALOG).map(([id, p]) => (
+                <option key={id} value={id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>Aim for <input className="narrow" type="number" value={target} onChange={(e) => setTarget(e.target.value)} /></label>
+          <label>Deadline <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} /></label>
         </div>
         <div className="row">
           <label>How often
@@ -172,9 +182,9 @@ export function GoalDetail({
       )}
       <div className="row">
         <span className={`status status-${goal.status}`}>{statusLabel(goal.status)}</span>
-        <span className="dim">team: {goal.squad.join(", ") || "—"}</span>
+        <span className="dim">team: {goal.squad.map(roleLabel).join(", ") || "—"}</span>
         <span className="dim">{scheduleLabel(goal.schedule)} · {modeLabel(goal.approval_mode)}</span>
-        {goal.deadline && <span className="dim">due {goal.deadline}</span>}
+        {dateLabel(goal.deadline) && <span className="dim">due {dateLabel(goal.deadline)}</span>}
       </div>
       <div className="row">
         <label>How often
@@ -209,7 +219,7 @@ export function GoalDetail({
           <input className="narrow" placeholder="number" value={point} onChange={(e) => setPoint(e.target.value)} />
           <button onClick={() => act(() => api.addMetricPoint(org, goalId, Number(point)), "Saved")}>Save number</button>
           <button onClick={() => act(() => api.pullMetric(org, goalId).then((r) => { if (!r.ok) throw new Error(r.reason); }), "Fetched")}>
-            Fetch now{goal.metric_source ? ` (${goal.metric_source.split(".")[0]})` : ""}
+            Fetch now{goal.metric_source ? ` (${providerLabel(goal.metric_source.split(".")[0])})` : ""}
           </button>
         </div>
       </section>
@@ -228,7 +238,7 @@ export function GoalDetail({
                 <button className="link" onClick={() => onRun(r.id)}>{sessionTitle(r).slice(0, 90)}</button>
                 <span className={`status status-${r.status}`}>{statusLabel(r.status)}</span>
               </div>
-              <span className="dim">{kindLabel(r.kind)} · {r.created_at.slice(0, 16)} · {r.ships > 0 ? shipCount(r.ships) : "no results yet"}</span>
+              <span className="dim">{kindLabel(r.kind)}{dateLabel(r.created_at) ? ` · ${dateLabel(r.created_at)}` : ""} · {r.ships > 0 ? shipCount(r.ships) : "no results yet"}</span>
             </li>
           ))}
         </ul>
@@ -238,7 +248,7 @@ export function GoalDetail({
         <ul className="list">
           {timeline.map((t, i) => (
             <li key={i}>
-              <span className="dim">{t.created_at.slice(0, 16)}</span>{" "}
+              <span className="dim">{dateLabel(t.created_at)}</span>{" "}
               <strong>{eventLabel(t.kind)}</strong> — {t.title}
             </li>
           ))}
@@ -297,6 +307,12 @@ export function Goals({
                 <span className={`status status-${g.status}`}>{statusLabel(g.status)}</span>
               </div>
               <span className="dim">{scheduleLabel(g.schedule)} · {modeLabel(g.approval_mode)}</span>
+              {g.metric_target != null && g.metric_name && (
+                <div className="dim">
+                  {g.metric_baseline != null ? `${g.metric_baseline} → ` : "aiming for "}
+                  {g.metric_target} {g.metric_name}
+                </div>
+              )}
             </li>
           ))}
         </ul>

@@ -762,7 +762,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           await commentOnIssue(
             token,
             issue.id,
-            `AI team run ${runId.slice(0, 8)} started: ${subIds.length} sub-tasks tracked here. This issue closes when the run ships.`,
+            `AI team run ${runId.slice(0, 8)} started: ${subIds.length} sub-tasks tracked here. This issue closes when the run is done.`,
           );
         } catch (err) {
           await audit(this.env, runId, "pm", "comment.failed", {
@@ -798,7 +798,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     const lines = (rows.results ?? []).map(
       (a) => `- ${a.kind}: ${a.status} (${a.target.slice(0, 80)})`,
     );
-    const head = `Run ${runId.slice(0, 8)} shipped "${decision.slice(0, 120)}"`;
+    const head = `Run ${runId.slice(0, 8)} finished "${decision.slice(0, 120)}"`;
     await this.linearCloseout(orgId, runId, `${head}:\n${lines.join("\n")}`);
     await this.slackCloseout(orgId, runId, `${head} — results:\n${lines.join("\n")}`);
   }

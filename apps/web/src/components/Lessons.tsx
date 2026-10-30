@@ -1,11 +1,84 @@
 import { useEffect, useState } from "react";
 import { api, type PlaybookRow } from "../api.js";
-import { statusLabel } from "@museaiteam/shared";
+import { providerLabel, statusLabel } from "@museaiteam/shared";
+
+function LessonCard({
+  org,
+  row,
+  onDone,
+}: {
+  org: string;
+  row: PlaybookRow;
+  onDone: (msg: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(row.tactic);
+
+  async function save(status: string, tactic?: string) {
+    try {
+      await api.patchPlaybook(org, row.id, {
+        status,
+        ...(tactic !== undefined ? { tactic } : {}),
+      });
+      setEditing(false);
+      onDone("Saved");
+    } catch (e) {
+      onDone(String(e));
+    }
+  }
+
+  return (
+    <li>
+      <span className={`status status-${row.status}`}>{statusLabel(row.status)}</span>{" "}
+      <span className="dim">{providerLabel(row.system)}</span>
+      {editing ? (
+        <>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={2}
+          />
+          <div className="row">
+            <button className="primary sm" onClick={() => save(row.status, text)}>
+              Save edit
+            </button>
+            <button
+              className="link"
+              onClick={() => {
+                setText(row.tactic);
+                setEditing(false);
+              }}
+            >
+              cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p>{row.tactic}</p>
+          <div className="row">
+            {row.status !== "approved" && (
+              <button className="primary sm" onClick={() => save("approved")}>
+                Approve
+              </button>
+            )}
+            {row.status !== "vetoed" && (
+              <button className="danger sm" onClick={() => save("vetoed")}>Reject</button>
+            )}
+            {row.status !== "draft" && (
+              <button className="sm" onClick={() => save("draft")}>Back to draft</button>
+            )}
+            <button className="link" onClick={() => setEditing(true)}>Edit</button>
+          </div>
+        </>
+      )}
+    </li>
+  );
+}
 
 export function Lessons({ org }: { org: string }) {
   const [rows, setRows] = useState<PlaybookRow[]>([]);
   const [msg, setMsg] = useState("");
-  const [edits, setEdits] = useState<Record<string, string>>({});
 
   async function load() {
     const r = await api.getPlaybook(org);
@@ -17,20 +90,6 @@ export function Lessons({ org }: { org: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org]);
 
-  async function save(id: string, status: string, tactic?: string) {
-    setMsg("");
-    try {
-      await api.patchPlaybook(org, id, {
-        status,
-        ...(tactic !== undefined ? { tactic } : {}),
-      });
-      setMsg("Saved");
-      await load();
-    } catch (e) {
-      setMsg(String(e));
-    }
-  }
-
   return (
     <div>
       <div className="page-head">
@@ -40,29 +99,21 @@ export function Lessons({ org }: { org: string }) {
       {msg && <p className="dim">{msg}</p>}
       <ul className="list">
         {rows.map((r) => (
-          <li key={r.id}>
-            <span className={`status status-${r.status}`}>{statusLabel(r.status)}</span>{" "}
-            <span className="dim">{r.system}</span>
-            <p>{edits[r.id] ?? r.tactic}</p>
-            <textarea
-              value={edits[r.id] ?? r.tactic}
-              onChange={(e) => setEdits({ ...edits, [r.id]: e.target.value })}
-              rows={2}
-            />
-            <div className="row">
-              <button className="primary sm" onClick={() => save(r.id, "approved", edits[r.id] ?? r.tactic)}>
-                Approve{edits[r.id] && edits[r.id] !== r.tactic ? " + save edit" : ""}
-              </button>
-              <button className="danger sm" onClick={() => save(r.id, "vetoed")}>Reject</button>
-              {r.status !== "draft" && <button className="sm" onClick={() => save(r.id, "draft")}>Back to draft</button>}
-            </div>
-          </li>
+          <LessonCard
+            key={r.id}
+            org={org}
+            row={r}
+            onDone={(m) => {
+              setMsg(m);
+              load().catch(() => undefined);
+            }}
+          />
         ))}
       </ul>
       {rows.length === 0 && (
         <div className="empty">
           <strong>Nothing learned yet</strong>
-          Rate shipped work and the team distills what works here.
+          Rate finished work and the team distills what works here.
         </div>
       )}
     </div>

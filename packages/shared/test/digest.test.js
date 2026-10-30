@@ -27,7 +27,7 @@ test("digest carries decision, would-have-done list, and CTA", () => {
 
 test("fully-shipped runs say so instead of listing", () => {
   const d = buildDigest({ ...BASE, decision: "Done", skipped: [] });
-  assert.ok(d.text.includes("Everything shipped"));
+  assert.ok(d.text.includes("Everything done"));
   assert.ok(!d.text.includes("Would-have-done"));
 });
 
