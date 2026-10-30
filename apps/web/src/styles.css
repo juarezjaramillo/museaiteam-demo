@@ -647,6 +647,128 @@ li.read {
   color: var(--accent-deep);
 }
 
+.badge.good {
+  background: var(--good-bg);
+  color: var(--good);
+}
+
+/* ---------- Hire rows: one line per hire, details on click ---------- */
+
+.hire-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  cursor: pointer;
+}
+
+.avatar {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.hire-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.hire-id .dim {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-wrap {
+  position: relative;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--dim);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+  border-radius: 8px;
+}
+
+.icon-btn:hover {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 10rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--s2);
+}
+
+.menu .link {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+}
+
+.menu .link:hover {
+  background: var(--bg);
+}
+
+button.link.danger-text,
+.menu .link.danger-text {
+  color: var(--bad);
+}
+
+.chev {
+  color: var(--faint);
+  font-size: 1.3rem;
+  line-height: 1;
+  transition: transform 0.12s;
+}
+
+.chev.up {
+  transform: rotate(-90deg);
+}
+
+.hire-detail {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.hire-detail p {
+  margin: 0;
+}
+
+.ask-tool {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--s2);
+  cursor: pointer;
+}
+
 .badge.warn {
   background: var(--warn-bg);
   color: var(--warn);

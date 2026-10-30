@@ -47,9 +47,10 @@ function SeatAskCard({ org, ask, done }: { org: string; ask: SeatAsk; done: () =
       <ul className="list">
         {ask.tools.map((t) => (
           <li key={t}>
-            <label>
-              <input type="checkbox" checked={!off.includes(t)} onChange={() => toggle(t)} /> {t}
-              {ask.paid.includes(t) && <span className="dim"> (paid seat)</span>}
+            <label className="ask-tool">
+              <input type="checkbox" checked={!off.includes(t)} onChange={() => toggle(t)} />
+              <span>{t}</span>
+              {ask.paid.includes(t) && <span className="dim">(paid seat)</span>}
             </label>
           </li>
         ))}
@@ -296,7 +297,7 @@ export function Approvals({
           </li>
         ))}
       </ul>
-      {rows.length === 0 && (
+      {rows.length === 0 && ideas.length === 0 && asks.length === 0 && (
         <div className="empty">
           <strong>All clear</strong>
           Nothing waiting on you.

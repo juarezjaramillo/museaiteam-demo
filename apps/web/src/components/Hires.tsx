@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { hireDisplayName } from "@museaiteam/shared";
+import { crewName, hireDisplayName } from "@museaiteam/shared";
 import { api, type HireRow } from "../api.js";
 import { ThumbDown, ThumbUp } from "./icons.js";
 
@@ -19,41 +19,20 @@ interface SeatView {
   logins: Array<{ tool: string; kind: string; status: string; expires: string | null }>;
 }
 
-function GrantForm({ org, seatId, done }: { org: string; seatId: string; done: () => void }) {
-  const [tools, setTools] = useState("");
-  const [msg, setMsg] = useState("");
-  const [open, setOpen] = useState(false);
-  if (!open) {
-    return (
-      <button className="link" onClick={() => setOpen(true)}>
-        give tools
-      </button>
-    );
-  }
-  async function grant() {
-    setMsg("");
-    try {
-      const r = await api.grantSeatTools(org, seatId, tools.split(/[,\s]+/).filter(Boolean));
-      setTools("");
-      setOpen(false);
-      done();
-      if (r.granted.length === 0) setMsg("Nothing new — all covered.");
-    } catch (e) {
-      setMsg(String(e));
-    }
-  }
-  return (
-    <span className="row">
-      <input
-        placeholder="figma, linear"
-        value={tools}
-        onChange={(e) => setTools(e.target.value)}
-      />
-      <button className="primary" onClick={grant}>Give</button>
-      <button className="link" onClick={() => setOpen(false)}>cancel</button>
-      {msg && <span className="dim">{msg}</span>}
-    </span>
-  );
+type HireStatus = "approval" | "attention" | "readying" | "working";
+
+function statusOf(s: SeatView): { kind: HireStatus; label: string } {
+  if (!s.approved) return { kind: "approval", label: "Needs approval" };
+  if (s.request?.status === "proposed") return { kind: "approval", label: "Needs approval" };
+  if (s.logins.some((l) => l.status === "lost")) return { kind: "attention", label: "Needs attention" };
+  if (!s.keystoneReady) return { kind: "readying", label: "Getting ready" };
+  return { kind: "working", label: "Working" };
+}
+
+function computerWords(box: string): string {
+  if (box === "running") return "On";
+  if (box === "sleeping") return "Asleep";
+  return "No computer yet";
 }
 
 function RelayForm({ org, seatId, tool, done }: { org: string; seatId: string; tool: string; done: () => void }) {
@@ -100,11 +79,182 @@ function RelayForm({ org, seatId, tool, done }: { org: string; seatId: string; t
   );
 }
 
+function GrantForm({ org, seatId, done }: { org: string; seatId: string; done: () => void }) {
+  const [tools, setTools] = useState("");
+  const [msg, setMsg] = useState("");
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button className="link" onClick={() => setOpen(true)}>
+        give tools
+      </button>
+    );
+  }
+  async function grant() {
+    setMsg("");
+    try {
+      const r = await api.grantSeatTools(org, seatId, tools.split(/[,\s]+/).filter(Boolean));
+      setTools("");
+      setOpen(false);
+      done();
+      if (r.granted.length === 0) setMsg("Nothing new — all covered.");
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+  return (
+    <span className="row">
+      <input
+        placeholder="figma, linear"
+        value={tools}
+        onChange={(e) => setTools(e.target.value)}
+      />
+      <button className="primary" onClick={grant}>Give</button>
+      <button className="link" onClick={() => setOpen(false)}>cancel</button>
+      {msg && <span className="dim">{msg}</span>}
+    </span>
+  );
+}
+
+function HireCard({
+  org,
+  seat: s,
+  role,
+  canDecide,
+  open,
+  onToggle,
+  menuOpen,
+  onMenu,
+  act,
+  reload,
+}: {
+  org: string;
+  seat: SeatView;
+  role: string;
+  canDecide: boolean;
+  open: boolean;
+  onToggle: () => void;
+  menuOpen: boolean;
+  onMenu: (open: boolean) => void;
+  act: (fn: () => Promise<unknown>, fail: string) => void;
+  reload: () => void;
+}) {
+  const st = statusOf(s);
+  const lost = s.logins.filter((l) => l.status === "lost");
+
+  function primary() {
+    if (!canDecide) return null;
+    if (!s.approved) {
+      return (
+        <button className="primary sm" onClick={(e) => { e.stopPropagation(); act(() => api.approveSeat(org, s.id), "Could not approve."); }}>
+          Approve
+        </button>
+      );
+    }
+    if (s.request?.status === "proposed") {
+      return (
+        <button className="primary sm" onClick={(e) => { e.stopPropagation(); act(() => api.decideSeatRequest(org, s.request!.id, true, []), "Could not approve."); }}>
+          Approve ({s.request.tools.length})
+        </button>
+      );
+    }
+    return null;
+  }
+
+  return (
+    <li className="hire">
+      <div className="hire-row" onClick={onToggle} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}>
+        <span className={`avatar role-${s.role}`}>{crewName(s.role).slice(0, 1)}</span>
+        <span className="hire-id">
+          <strong>{hireDisplayName(s.role)}</strong>
+          <span className="dim">{s.role} · {s.email ?? "no inbox yet"}</span>
+        </span>
+        <span className={`badge ${st.kind === "working" ? "good" : st.kind === "readying" ? "soft" : "warn"}`}>{st.label}</span>
+        {primary()}
+        <span className="menu-wrap">
+          <button
+            className="icon-btn"
+            aria-label="More actions"
+            onClick={(e) => { e.stopPropagation(); onMenu(!menuOpen); }}
+          >
+            ⋮
+          </button>
+          {menuOpen && (
+            <span className="menu" onClick={(e) => e.stopPropagation()}>
+              {s.box === "sleeping" && canDecide && (
+                <button className="link" onClick={() => { onMenu(false); act(() => api.wakeBox(org, s.id), "Computer is busy or offline."); }}>
+                  Wake computer
+                </button>
+              )}
+              {role === "owner" && (
+                <button
+                  className="link danger-text"
+                  onClick={() => {
+                    onMenu(false);
+                    if (window.confirm(`Offboard ${hireDisplayName(s.role)}? Logins wiped, computer destroyed, inbox frozen.`)) {
+                      act(() => api.fireSeat(org, s.id), "Could not offboard.");
+                    }
+                  }}
+                >
+                  Offboard
+                </button>
+              )}
+            </span>
+          )}
+        </span>
+        <span className={`chev ${open ? "up" : ""}`}>›</span>
+      </div>
+      {open && (
+        <div className="hire-detail">
+          {s.request?.status === "proposed" && (
+            <p>
+              Asked for: {s.request.tools.join(", ")}
+              {s.request.paid.length > 0 && <span className="dim"> (paid seats: {s.request.paid.join(", ")})</span>}{" "}
+              <a href="#/approvals">pick tools</a>
+            </p>
+          )}
+          {lost.length > 0 && (
+            <p>
+              {lost.map((l) => l.tool).join(", ")} stopped working.{" "}
+              {role === "owner" ? "Paste a fresh login below." : "Ask the owner for a fresh login."}
+            </p>
+          )}
+          {s.on.length > 0 && <p>Ready: {s.on.join(", ")}</p>}
+          {s.waiting.map((w) => (
+            <p key={w.tool} className="dim">
+              {w.tool} — {w.detail || w.status}{" "}
+              {role === "owner" && <RelayForm org={org} seatId={s.id} tool={w.tool} done={reload} />}
+            </p>
+          ))}
+          {s.logins.length > 0 && (
+            <p className="dim">
+              Logins: {s.logins.map((l) => (
+                <span key={l.tool}>
+                  {l.tool} ({l.status === "ok" ? (l.expires ? `ok till ${l.expires.slice(0, 10)}` : "ok") : l.status}){" "}
+                </span>
+              ))}
+            </p>
+          )}
+          <p className="dim">
+            Computer: {computerWords(s.box)}
+            {s.spend && s.spend.seconds > 0 && (
+              <> · {Math.round(s.spend.seconds / 60)} min · about ${(s.spend.cents / 100).toFixed(2)}</>
+            )}
+          </p>
+          {canDecide && <GrantForm org={org} seatId={s.id} done={reload} />}
+        </div>
+      )}
+    </li>
+  );
+}
+
 export function Hires({ org, role }: { org: string; role: string }) {
   const [hires, setHires] = useState<HireRow[]>([]);
   const [seats, setSeats] = useState<SeatView[]>([]);
   const [meanwhile, setMeanwhile] = useState<string[]>([]);
   const [cutover, setCutover] = useState<{ cutOver: boolean; providers: string[]; servers: string[]; kept: string[] } | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [menu, setMenu] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const canDecide = role === "owner" || role === "approver";
 
@@ -142,93 +292,23 @@ export function Hires({ org, role }: { org: string; role: string }) {
       <div className="page-head">
         <h1>Hires</h1>
       </div>
-      <p className="page-sub">Each hire's desk: what is ready, what is waiting, what it costs.</p>
+      <p className="page-sub">Your AI employees and what they need.</p>
       {msg && <p className="dim">{msg}</p>}
       <ul className="list">
         {seats.map((s) => (
-          <li key={s.id}>
-            <div className="card-head">
-              <strong><span className={`role role-${s.role}`}>{hireDisplayName(s.role)}</span></strong>
-              <span className="dim">{s.email ?? "no inbox yet"}</span>
-              {s.approved ? (
-                <span className="badge soft">working</span>
-              ) : (
-                canDecide && (
-                  <button
-                    className="primary"
-                    onClick={() => act(() => api.approveSeat(org, s.id), "Could not approve.")}
-                  >
-                    Approve all
-                  </button>
-                )
-              )}
-              {s.sessionOne && <span className="badge soft">started</span>}
-              {role === "owner" && (
-                <button
-                  className="link"
-                  onClick={() => {
-                    if (window.confirm(`Offboard ${hireDisplayName(s.role)}? Logins wiped, desk destroyed, inbox frozen.`)) {
-                      act(() => api.fireSeat(org, s.id), "Could not offboard.");
-                    }
-                  }}
-                >
-                  offboard
-                </button>
-              )}
-            </div>
-            <div className="dim">
-              {s.keystone && (
-                <>Main tool: {s.keystone} {s.keystoneReady ? "ready" : "not ready yet"} · </>
-              )}
-              Desk: {s.box}
-              {s.box === "sleeping" && canDecide && (
-                <> · <button className="link" onClick={() => act(() => api.wakeBox(org, s.id), "Desk is busy or offline.")}>wake</button></>
-              )}
-              {s.spend && s.spend.seconds > 0 && (
-                <> · {Math.round(s.spend.seconds / 60)} min on the desk (${(s.spend.cents / 100).toFixed(2)} guess)</>
-              )}
-            </div>
-            {s.request && s.request.status === "proposed" && (
-              <div>
-                Asked for: {s.request.tools.map((t) => (
-                  <span key={t} className="badge warn">{t}</span>
-                ))}
-                {s.request.paid.length > 0 && (
-                  <span className="dim"> (paid: {s.request.paid.join(", ")})</span>
-                )}{" "}
-                <span className="dim">— answer in Approvals</span>
-              </div>
-            )}
-            {s.on.length > 0 && (
-              <div>Ready: {s.on.map((t) => (
-                <span key={t} className="badge soft">{t}</span>
-              ))}</div>
-            )}
-            {s.logins.length > 0 && (
-              <div className="dim">
-                Logins: {s.logins.map((l) => (
-                  <span key={l.tool}>
-                    {l.tool} ({l.status}{l.status === "ok" && l.expires ? `, ok till ${l.expires.slice(0, 10)}` : ""}){" "}
-                  </span>
-                ))}
-              </div>
-            )}
-            {canDecide && (
-              <div><GrantForm org={org} seatId={s.id} done={load} /></div>
-            )}
-            {s.waiting.length > 0 && (
-              <ul className="list">
-                {s.waiting.map((w) => (
-                  <li key={w.tool}>
-                    <strong>{w.tool}</strong> <span className="dim">{w.detail || w.status}</span>{" "}
-                    {role === "owner" && (
-                      <RelayForm org={org} seatId={s.id} tool={w.tool} done={load} />
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </li>
+          <HireCard
+            key={s.id}
+            org={org}
+            seat={s}
+            role={role}
+            canDecide={canDecide}
+            open={expanded === s.id}
+            onToggle={() => setExpanded((cur) => (cur === s.id ? null : s.id))}
+            menuOpen={menu === s.id}
+            onMenu={(o) => setMenu(o ? s.id : null)}
+            act={act}
+            reload={load}
+          />
         ))}
       </ul>
       {meanwhile.length > 0 && (

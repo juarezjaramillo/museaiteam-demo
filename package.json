@@ -6,7 +6,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "containers/*"
+    "containers/*",
+    "tools/*"
   ],
   "scripts": {
     "dev:api": "npm run dev -w apps/api",

@@ -1589,7 +1589,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
             server: found.server.name,
             tool: tool.name,
             reason: "seatless",
-            note: `waiting on the hire's own ${found.server.name} seat — doing other work meanwhile`,
+            note: `waiting on the hire's own ${found.server.name} seat`,
           });
           history += asked.filed.length > 0
             ? `\n- ${found.server.name}.${tool.name}: skipped (asked for ${asked.filed.join(", ")})`
