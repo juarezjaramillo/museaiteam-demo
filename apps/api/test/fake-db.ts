@@ -710,6 +710,13 @@ export class FakeDB {
             });
             return { meta: { changes: 1 } };
           }
+          if (q.startsWith("INSERT INTO provider_config (org_id, provider, config, updated_at)")) {
+            const [org_id, provider, config] = p as string[];
+            const row = t.provider_config.find((x) => x.org_id === org_id && x.provider === provider);
+            if (row) row.config = config;
+            else t.provider_config.push({ org_id, provider, config });
+            return { meta: { changes: 1 } };
+          }
           if (q.startsWith("INSERT INTO public_images")) {
             t.public_images.push({
               token: p[0], r2_key: p[1], org_id: p[2], action_id: p[3], revoked_at: null,

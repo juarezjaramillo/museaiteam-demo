@@ -498,6 +498,58 @@ export async function getProviderConfig(
   }
 }
 
+export class BadProviderConfig extends Error {}
+
+/**
+ * Merge an incoming provider config over the stored one: PUT is a
+ * patch, so partial saves never wipe keys they don't mention. A
+ * plaintext `storePassword` is encrypted into `storePasswordEnc` and
+ * never stored as-is.
+ */
+export async function prepareProviderConfig(
+  env: Env,
+  orgId: string,
+  provider: Provider,
+  incoming: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const existing = await getProviderConfig(env, orgId, provider);
+  const merged: Record<string, unknown> = { ...existing, ...incoming };
+  if ("storePassword" in incoming) {
+    const pw = incoming.storePassword;
+    if (
+      provider !== "shopify" ||
+      typeof pw !== "string" ||
+      !pw.trim() ||
+      pw.length > 200
+    ) {
+      throw new BadProviderConfig("config.storePassword must be a 1-200 char string");
+    }
+    merged.storePasswordEnc = await encryptToB64(keyFromHex(env.TOKEN_ENC_KEY), pw);
+  }
+  delete merged.storePassword;
+  return merged;
+}
+
+/** Config safe for APIs: secrets stripped, saved-flags in their place. */
+export function publicProviderConfig(
+  provider: string,
+  stored: Record<string, unknown>,
+): Record<string, unknown> {
+  if (provider !== "shopify") return stored;
+  const rest = { ...stored };
+  const saved = typeof rest.storePasswordEnc === "string" && !!rest.storePasswordEnc;
+  delete rest.storePasswordEnc;
+  delete rest.storePassword;
+  return { ...rest, storePasswordSaved: saved };
+}
+
+/** Decrypt the saved storefront password, or null when none is saved. */
+export async function getStorePassword(env: Env, orgId: string): Promise<string | null> {
+  const { storePasswordEnc } = await getProviderConfig(env, orgId, "shopify");
+  if (typeof storePasswordEnc !== "string" || !storePasswordEnc) return null;
+  return (await decryptToken(env, storePasswordEnc)).text;
+}
+
 export async function setProviderConfig(
   env: Env,
   orgId: string,

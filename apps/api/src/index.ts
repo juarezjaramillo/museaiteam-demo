@@ -105,11 +105,14 @@ import {
   ProviderNotConfigured,
   callbackUrl,
   connectUrl,
+  BadProviderConfig,
   exchangeCode,
   finishConnect,
   getProviderConfig,
   isProvider,
   loadToken,
+  prepareProviderConfig,
+  publicProviderConfig,
   setProviderConfig,
   tokenStatus,
   type TokenStatus,
@@ -1660,7 +1663,9 @@ app.get("/api/orgs/:org/config/:provider", async (c) => {
   const provider = c.req.param("provider");
   if (!org) return c.json({ error: "forbidden" }, 403);
   if (!isProvider(provider)) return c.json({ error: "unknown provider" }, 400);
-  return c.json({ config: await getProviderConfig(c.env, org, provider) });
+  return c.json({
+    config: publicProviderConfig(provider, await getProviderConfig(c.env, org, provider)),
+  });
 });
 
 app.put(
@@ -1674,14 +1679,21 @@ app.put(
       return c.json({ error: "unknown provider" }, 400);
     }
     const { config } = c.req.valid("json");
-    const check = validateProviderConfig(provider, config);
+    let merged: Record<string, unknown>;
+    try {
+      merged = await prepareProviderConfig(c.env, org, provider, config);
+    } catch (err) {
+      if (err instanceof BadProviderConfig) return c.json({ error: err.message }, 400);
+      throw err;
+    }
+    const check = validateProviderConfig(provider, merged);
     if (!check.ok) return c.json({ error: check.error }, 400);
     // Store the canonical shop domain so the OAuth state and the saved
     // config can never disagree on spelling.
     const canonical =
       provider === "shopify"
-        ? { ...config, shop: normalizeShop(String(config.shop)) }
-        : config;
+        ? { ...merged, shop: normalizeShop(String(merged.shop)) }
+        : merged;
     await setProviderConfig(c.env, org, provider, canonical);
     await audit(c.env, null, "human", "provider.config_saved", {
       org,

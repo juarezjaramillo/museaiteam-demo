@@ -344,6 +344,9 @@ function ToolsStep({
   const [shop, setShop] = useState("");
   const [parent, setParent] = useState("");
   const [savedParent, setSavedParent] = useState("");
+  const [storePw, setStorePw] = useState("");
+  const [storePwSaved, setStorePwSaved] = useState(false);
+  const [replacingPw, setReplacingPw] = useState(false);
   const [products, setProducts] = useState<Array<{ id: string; title: string }>>([]);
   const [url, setUrl] = useState("");
   const [q, setQ] = useState("");
@@ -360,6 +363,10 @@ function ToolsStep({
       .getProducts(org)
       .then((p) => setProducts(p.products))
       .catch(() => setProducts([]));
+    api
+      .getProviderConfig(org, "shopify")
+      .then(({ config }) => setStorePwSaved(config.storePasswordSaved === true))
+      .catch(() => setStorePwSaved(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org, conns.shopify]);
 
@@ -368,6 +375,18 @@ function ToolsStep({
       await api.putProviderConfig(org, "notion", { parentPageId: parent });
       setSavedParent(parent);
       notify("Notion parent page saved.");
+    } catch (e) {
+      notify(String(e));
+    }
+  }
+
+  async function saveStorePw() {
+    try {
+      await api.putProviderConfig(org, "shopify", { storePassword: storePw });
+      setStorePw("");
+      setStorePwSaved(true);
+      setReplacingPw(false);
+      notify("Store password saved.");
     } catch (e) {
       notify(String(e));
     }
@@ -563,6 +582,48 @@ function ToolsStep({
           </button>
           {savedParent && <span className="dim">saved: {savedParent}</span>}
         </div>
+        {conns.shopify === "connected" && (
+          <>
+            <div className="row">
+              {storePwSaved && !replacingPw ? (
+                <>
+                  <span className="dim">Store password: Saved</span>
+                  <button className="sm" onClick={() => setReplacingPw(true)}>
+                    Replace
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="password"
+                    aria-label="Store password (development stores only)"
+                    placeholder="Store password (development stores only)"
+                    value={storePw}
+                    onChange={(e) => setStorePw(e.target.value)}
+                  />
+                  <button className="sm" onClick={saveStorePw} disabled={!storePw.trim()}>
+                    Save
+                  </button>
+                  {replacingPw && (
+                    <button
+                      className="sm"
+                      onClick={() => {
+                        setReplacingPw(false);
+                        setStorePw("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+            <p className="dim">
+              The team uses it to check your store like a customer. Find it in Shopify: Online
+              Store → Preferences → Password protection.
+            </p>
+          </>
+        )}
         {conns.shopify === "connected" && (
           <p className="dim">
             Showcase product for demos/reverts:{" "}
