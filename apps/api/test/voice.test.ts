@@ -5,10 +5,14 @@ import { requireSession } from "../src/auth.js";
 import {
   _resetVoiceCaches,
   isWav,
+  shapeVoiceNote,
   transcribeUpload,
   voiceKeywords,
   wavSeconds,
 } from "../src/voice.js";
+import type { SparkClient } from "../src/spark.js";
+import { createGoal, getGoal } from "../src/goals.js";
+import { getBrief, putBrief } from "../src/teams.js";
 import { FakeDB, blankTables, type FakeTables } from "./fake-db.js";
 
 const TEST_KEY = "0".repeat(64);
@@ -306,6 +310,129 @@ describe("transcribeUpload", () => {
     const noAudio = await transcribeUpload(w.env, ORG, null, "goal");
     expect(noAudio.status).toBe(400);
     expect(w.metaCalls).toHaveLength(0);
+  });
+});
+
+describe("shapeVoiceNote", () => {
+  function fakeClient(data: unknown, seen: Array<Record<string, unknown>> = []) {
+    return {
+      async chat(_schema: unknown, opts: Record<string, unknown>) {
+        seen.push(opts);
+        return { data, tokensUsed: 3 };
+      },
+    } as unknown as SparkClient;
+  }
+  const ENV = {} as Env;
+
+  it("shapes an English goal note", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const out = await shapeVoiceNote(
+      ENV,
+      "Black Friday is in three weeks. Get the store ready with a discount for returning customers.",
+      "goal",
+      fakeClient(
+        {
+          language: "English",
+          title: "Get the store ready for Black Friday",
+          metric: "returning-customer orders",
+          briefNote: "Black Friday is in three weeks; ready the store with a returning-customer discount.",
+          english: "Black Friday is in three weeks. Get the store ready with a discount for returning customers.",
+        },
+        seen,
+      ),
+    );
+    expect(out).toMatchObject({
+      language: "English",
+      title: "Get the store ready for Black Friday",
+      metric: "returning-customer orders",
+    });
+    expect(String(seen[0].user)).toContain("do not add facts");
+  });
+
+  it("shapes a Spanish goal note with an English version", async () => {
+    const out = await shapeVoiceNote(
+      ENV,
+      "El Buen Fin ya viene. Prepara la tienda con un descuento para clientes frecuentes.",
+      "goal",
+      fakeClient({
+        language: "Spanish",
+        title: "Prepara la tienda para El Buen Fin",
+        metric: "pedidos de clientes frecuentes",
+        briefNote: "El Buen Fin ya viene; prepara la tienda con un descuento para clientes frecuentes.",
+        english: "El Buen Fin is coming. Get the store ready with a discount for returning customers.",
+      }),
+    );
+    expect(out).toMatchObject({ language: "Spanish" });
+    expect((out as { english: string }).english).toContain("returning customers");
+  });
+
+  it("shapes a brief and clamps wild replies", async () => {
+    const out = await shapeVoiceNote(
+      ENV,
+      "Oigan, también contesten los tickets en español.",
+      "brief",
+      fakeClient({
+        language: "Spanish",
+        original: "Oigan, también contesten los tickets en español.",
+        english: "Also answer the tickets in Spanish.",
+      }),
+    );
+    expect(out).toEqual({
+      language: "Spanish",
+      original: "Oigan, también contesten los tickets en español.",
+      english: "Also answer the tickets in Spanish.",
+    });
+    const long = await shapeVoiceNote(
+      ENV,
+      "Get the store ready for Black Friday with a discount and fresh images",
+      "goal",
+      fakeClient({
+        language: "English",
+        title: "x".repeat(200),
+        metric: "y".repeat(500),
+        briefNote: "ok",
+        english: "",
+      }),
+    );
+    expect((long as { title: string }).title).toHaveLength(80);
+    expect((long as { metric: string }).metric).toHaveLength(120);
+    expect((long as { english: string }).english).toContain("Black Friday");
+  });
+});
+
+describe("voice fields on goals and briefs", () => {
+  it("createGoal stores and returns voice fields", async () => {
+    const tables = blankTables();
+    const env = { DB: new FakeDB(tables) } as unknown as Env;
+    const id = await createGoal(env, ORG, {
+      title: "Get the store ready for Black Friday",
+      voiceKey: "voice/org1/a.wav",
+      originalText: "spoken words here",
+      originalLanguage: "Spanish",
+    });
+    expect(await getGoal(env, ORG, id)).toMatchObject({
+      voice_key: "voice/org1/a.wav",
+      original_text: "spoken words here",
+      original_language: "Spanish",
+    });
+  });
+
+  it("putBrief stores and returns voice fields", async () => {
+    const tables = blankTables();
+    tables.teams.push({ id: "t1", org_id: ORG, name: "Store Crew" });
+    const env = { DB: new FakeDB(tables) } as unknown as Env;
+    await putBrief(env, ORG, "t1", "Also answer the tickets in Spanish.", "2026-11-02", undefined, {
+      key: "voice/org1/b.wav",
+      text: "Oigan, también contesten los tickets en español.",
+      language: "Spanish",
+    });
+    expect(await getBrief(env, ORG, "t1", "2026-11-02")).toEqual({
+      text: "Also answer the tickets in Spanish.",
+      reviewedAt: null,
+      voiceKey: "voice/org1/b.wav",
+      originalText: "Oigan, también contesten los tickets en español.",
+      originalLanguage: "Spanish",
+    });
   });
 });
 

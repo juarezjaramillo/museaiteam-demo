@@ -14,6 +14,9 @@ export interface Goal {
   id: string;
   org_id: string;
   team_id: string | null;
+  voice_key: string | null;
+  original_text: string | null;
+  original_language: string | null;
   title: string;
   metric_name: string | null;
   metric_source: string | null;
@@ -31,6 +34,9 @@ export interface Goal {
 
 export interface GoalInput {
   teamId?: string;
+  voiceKey?: string;
+  originalText?: string;
+  originalLanguage?: string;
   title: string;
   metricName?: string;
   metricSource?: string;
@@ -62,6 +68,9 @@ function parseGoal(row: Record<string, unknown> & { id: string }): Goal {
     id: row.id,
     org_id: String(row.org_id),
     team_id: (row.team_id as string | null) ?? null,
+    voice_key: (row.voice_key as string | null) ?? null,
+    original_text: (row.original_text as string | null) ?? null,
+    original_language: (row.original_language as string | null) ?? null,
     title: String(row.title),
     metric_name: (row.metric_name as string | null) ?? null,
     metric_source: (row.metric_source as string | null) ?? null,
@@ -80,6 +89,9 @@ function parseGoal(row: Record<string, unknown> & { id: string }): Goal {
 
 interface CleanGoal {
   teamId: string | null;
+  voiceKey: string | null;
+  originalText: string | null;
+  originalLanguage: string | null;
   title: string;
   metricName?: string;
   metricSource?: string;
@@ -107,6 +119,9 @@ function checked(input: GoalInput): CleanGoal {
   }
   return {
     teamId: input.teamId ?? null,
+    voiceKey: input.voiceKey?.trim().slice(0, 200) || null,
+    originalText: input.originalText?.trim().slice(0, 4000) || null,
+    originalLanguage: input.originalLanguage?.trim().slice(0, 40) || null,
     title,
     metricName: input.metricName,
     // No metric at all stays null; a named metric without a source gets
@@ -134,8 +149,9 @@ export async function createGoal(
   const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO goals (id, org_id, team_id, title, metric_name, metric_source,
-      metric_baseline, metric_target, deadline, schedule, approval_mode)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      metric_baseline, metric_target, deadline, schedule, approval_mode,
+      voice_key, original_text, original_language)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -149,6 +165,9 @@ export async function createGoal(
       g.deadline ?? null,
       g.schedule,
       g.approvalMode,
+      g.voiceKey,
+      g.originalText,
+      g.originalLanguage,
     )
     .run();
   // The squad staffs lazily at the first work run (§2 claim) so creation

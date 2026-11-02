@@ -323,6 +323,9 @@ export function todayDay(now = new Date()): string {
 export interface TeamBrief {
   text: string;
   reviewedAt: string | null;
+  voiceKey: string | null;
+  originalText: string | null;
+  originalLanguage: string | null;
 }
 
 async function briefRow(
@@ -331,11 +334,24 @@ async function briefRow(
   day: string,
 ): Promise<TeamBrief> {
   const row = await env.DB.prepare(
-    "SELECT text, reviewed_at FROM team_briefs WHERE team_id = ? AND day = ?",
+    `SELECT text, reviewed_at, voice_key, original_text, original_language
+     FROM team_briefs WHERE team_id = ? AND day = ?`,
   )
     .bind(teamId, day)
-    .first<{ text: string; reviewed_at: string | null }>();
-  return { text: row?.text ?? "", reviewedAt: row?.reviewed_at ?? null };
+    .first<{
+      text: string;
+      reviewed_at: string | null;
+      voice_key: string | null;
+      original_text: string | null;
+      original_language: string | null;
+    }>();
+  return {
+    text: row?.text ?? "",
+    reviewedAt: row?.reviewed_at ?? null,
+    voiceKey: row?.voice_key ?? null,
+    originalText: row?.original_text ?? null,
+    originalLanguage: row?.original_language ?? null,
+  };
 }
 
 /** Today's brief text, or "" when the team wrote nothing: safe to feed sessions. */
@@ -359,6 +375,12 @@ export async function getBrief(
   return briefRow(env, teamId, day);
 }
 
+export interface BriefVoice {
+  key?: string;
+  text?: string;
+  language?: string;
+}
+
 /** Upsert today's brief. One row per team per day exists by construction. */
 export async function putBrief(
   env: Env,
@@ -367,14 +389,24 @@ export async function putBrief(
   text: string,
   day = todayDay(),
   memberId?: string,
+  voice?: BriefVoice,
 ): Promise<void> {
   if (!(await visibleTeam(env, orgId, teamId, memberId))) throw new BadRole("unknown team");
   await env.DB.prepare(
-    `INSERT INTO team_briefs (team_id, day, text, updated_at)
-     VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(team_id, day) DO UPDATE SET text = excluded.text, updated_at = datetime('now')`,
+    `INSERT INTO team_briefs (team_id, day, text, voice_key, original_text, original_language, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(team_id, day) DO UPDATE SET text = excluded.text,
+       voice_key = excluded.voice_key, original_text = excluded.original_text,
+       original_language = excluded.original_language, updated_at = datetime('now')`,
   )
-    .bind(teamId, day, text)
+    .bind(
+      teamId,
+      day,
+      text,
+      voice?.key?.trim().slice(0, 200) || null,
+      voice?.text?.trim().slice(0, 4000) || null,
+      voice?.language?.trim().slice(0, 40) || null,
+    )
     .run();
   await audit(env, null, "human", "team.brief", { org: orgId, team: teamId, day });
 }

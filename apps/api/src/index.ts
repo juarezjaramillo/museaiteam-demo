@@ -55,7 +55,7 @@ import { runBaseline } from "./baseline.js";
 import { BoxOffline, BoxQuota, boxSpend, provider, reconcileBoxes } from "./box.js";
 import { audit, getRun } from "./db.js";
 import { servePublicImage } from "./creative.js";
-import { transcribeUpload } from "./voice.js";
+import { shapeVoiceNote, transcribeUpload } from "./voice.js";
 import { nudgeSeatRequests, teamSeats } from "./enroll.js";
 import { getSeat, listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
 import {
@@ -1804,13 +1804,26 @@ app.get("/api/orgs/:org/teams/:teamId/review", async (c) => {
 
 app.put(
   "/api/orgs/:org/teams/:teamId/brief",
-  zValidator("json", z.object({ text: z.string().max(4000) })),
+  zValidator(
+    "json",
+    z.object({
+      text: z.string().max(4000),
+      voiceKey: z.string().max(200).optional(),
+      originalText: z.string().max(4000).optional(),
+      originalLanguage: z.string().max(40).optional(),
+    }),
+  ),
   async (c) => {
     const org = await roleOrg(c, ...EVERYONE);
     if (!org) return c.json({ error: "forbidden" }, 403);
     try {
       const scope = await teamScope(c, org);
-      await putBrief(c.env, org, c.req.param("teamId"), c.req.valid("json").text, undefined, scope);
+      const body = c.req.valid("json");
+      await putBrief(c.env, org, c.req.param("teamId"), body.text, undefined, scope, {
+        key: body.voiceKey,
+        text: body.originalText,
+        language: body.originalLanguage,
+      });
       return c.json(await getBrief(c.env, org, c.req.param("teamId"), undefined, scope));
     } catch (err) {
       if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);
@@ -1833,6 +1846,24 @@ app.post("/api/orgs/:org/voice/transcribe", async (c) => {
   }
   return transcribeUpload(c.env, org, form.get("audio"), form.get("context"));
 });
+
+app.post(
+  "/api/orgs/:org/voice/shape",
+  zValidator(
+    "json",
+    z.object({ text: z.string().min(1).max(10000), context: z.enum(["goal", "brief"]) }),
+  ),
+  async (c) => {
+    const org = await roleOrg(c, ...EVERYONE);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    const body = c.req.valid("json");
+    try {
+      return c.json(await shapeVoiceNote(c.env, body.text, body.context));
+    } catch {
+      return c.json({ error: "Couldn't shape that note. Try again." }, 502);
+    }
+  },
+);
 
 app.post("/api/orgs/:org/teams/:teamId/review", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
@@ -1866,6 +1897,9 @@ app.post(
       deadline: z.string().optional(),
       schedule: z.string().optional(),
       approvalMode: z.string().optional(),
+      voiceKey: z.string().max(200).optional(),
+      originalText: z.string().max(4000).optional(),
+      originalLanguage: z.string().max(40).optional(),
     }),
   ),
   async (c) => {

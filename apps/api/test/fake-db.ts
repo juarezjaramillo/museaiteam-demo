@@ -278,9 +278,9 @@ export class FakeDB {
             const r = t.teams.find((x) => x.id === p[0] && x.org_id === p[1]);
             return ((r ? { id: r.id, name: r.name, owner_user_id: r.owner_user_id ?? null } : null) as T) ?? null;
           }
-          if (q.startsWith("SELECT text, reviewed_at FROM team_briefs WHERE team_id = ? AND day = ?")) {
+          if (q.startsWith("SELECT text, reviewed_at, voice_key, original_text, original_language FROM team_briefs WHERE team_id = ? AND day = ?")) {
             const r = t.team_briefs.find((x) => x.team_id === p[0] && x.day === p[1]);
-            return ((r ? { text: r.text, reviewed_at: r.reviewed_at ?? null } : null) as T) ?? null;
+            return ((r ? { text: r.text, reviewed_at: r.reviewed_at ?? null, voice_key: r.voice_key ?? null, original_text: r.original_text ?? null, original_language: r.original_language ?? null } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT reviewed_at FROM team_briefs WHERE team_id = ? AND reviewed_at IS NOT NULL")) {
             const rows = t.team_briefs
@@ -962,7 +962,12 @@ export class FakeDB {
           }
           if (q.startsWith("INSERT INTO goals (id, org_id, team_id, title")) {
             const [id, org_id, team_id, title] = p as string[];
-            t.goals.push({ id, org_id, team_id, title, squad: "[]", status: "active" });
+            t.goals.push({
+              id, org_id, team_id, title, squad: "[]", status: "active",
+              voice_key: (p[11] as string | null) ?? null,
+              original_text: (p[12] as string | null) ?? null,
+              original_language: (p[13] as string | null) ?? null,
+            });
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO goal_events (goal_id, kind, title, detail)")) {
@@ -1083,6 +1088,19 @@ export class FakeDB {
             const row = t.team_briefs.find((x) => x.team_id === team_id && x.day === day);
             if (row) row.text = text;
             else t.team_briefs.push({ team_id, day, text, reviewed_at: null });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO team_briefs (team_id, day, text, voice_key")) {
+            const [team_id, day, text, voice_key, original_text, original_language] = p as (string | null)[];
+            const row = t.team_briefs.find((x) => x.team_id === team_id && x.day === day);
+            if (row) {
+              row.text = text;
+              row.voice_key = voice_key;
+              row.original_text = original_text;
+              row.original_language = original_language;
+            } else {
+              t.team_briefs.push({ team_id, day, text, reviewed_at: null, voice_key, original_text, original_language });
+            }
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO team_briefs (team_id, day, text, reviewed_at, updated_at)")) {

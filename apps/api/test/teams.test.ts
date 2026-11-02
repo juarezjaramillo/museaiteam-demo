@@ -63,11 +63,20 @@ describe("team ownership", () => {
 describe("brief + review ritual", () => {
   it("round-trips the daily brief", async () => {
     const { env: e } = env();
-    expect(await getBrief(e, "org1", "t1")).toEqual({ text: "", reviewedAt: null });
+    expect(await getBrief(e, "org1", "t1")).toEqual({
+      text: "",
+      reviewedAt: null,
+      voiceKey: null,
+      originalText: null,
+      originalLanguage: null,
+    });
     await putBrief(e, "org1", "t1", "today matters: the Acme tickets");
     expect(await getBrief(e, "org1", "t1")).toEqual({
       text: "today matters: the Acme tickets",
       reviewedAt: null,
+      voiceKey: null,
+      originalText: null,
+      originalLanguage: null,
     });
     await putBrief(e, "org1", "t1", "updated");
     expect((await getBrief(e, "org1", "t1")).text).toBe("updated");

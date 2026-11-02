@@ -1,5 +1,7 @@
+import { z } from "zod";
 import { crewName } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
+import { SparkClient } from "./spark.js";
 import { audit } from "./db.js";
 import { getProviderConfig, loadToken } from "./oauth.js";
 import { listProducts } from "./integrations/shopify.js";
@@ -104,6 +106,78 @@ export async function voiceKeywords(env: Env, orgId: string): Promise<string[]> 
   }
   for (const t of await shopifyTitles(env, orgId)) push(t);
   return out.slice(0, 50);
+}
+
+export const VoiceGoalShape = z.object({
+  language: z.string(),
+  title: z.string(),
+  metric: z.string(),
+  briefNote: z.string(),
+  english: z.string(),
+});
+export type VoiceGoalShape = z.infer<typeof VoiceGoalShape>;
+
+export const VoiceBriefShape = z.object({
+  language: z.string(),
+  original: z.string(),
+  english: z.string(),
+});
+export type VoiceBriefShape = z.infer<typeof VoiceBriefShape>;
+
+export type VoiceShape = VoiceGoalShape | VoiceBriefShape;
+
+/**
+ * Shape a transcript into a goal draft or a brief, in the owner's
+ * language plus English. Bounds are clamped in code so a wild reply
+ * degrades instead of failing.
+ */
+export async function shapeVoiceNote(
+  env: Env,
+  text: string,
+  context: "goal" | "brief",
+  client?: SparkClient,
+): Promise<VoiceShape> {
+  const c = client ?? new SparkClient(env);
+  const clean = text.trim();
+  if (context === "goal") {
+    const res = await c.chat(VoiceGoalShape, {
+      system:
+        "You shape voice notes into goal drafts. You never invent facts, numbers, or promises. Reply JSON only.",
+      user: [
+        "Turn this spoken voice note into a goal draft.",
+        'Reply JSON: {"language": "<language name, e.g. English>", "title": "<8-80 chars>", "metric": "<short number to move, or empty>", "briefNote": "<the owner\'s words cleaned up, max 2000 chars>", "english": "<English version, or the same text when already English>"}.',
+        "Rules: do not add facts, numbers or promises the owner did not say. Keep their meaning; cut filler.",
+        "Voice note:",
+        `"""${clean}"""`,
+      ].join("\n"),
+      temperature: 0.3,
+    });
+    const title = res.data.title.trim().slice(0, 80);
+    return {
+      language: res.data.language.trim().slice(0, 40) || "unknown",
+      title: title.length >= 8 ? title : clean.slice(0, 80),
+      metric: res.data.metric.trim().slice(0, 120),
+      briefNote: res.data.briefNote.trim().slice(0, 2000),
+      english: res.data.english.trim() || clean,
+    };
+  }
+  const res = await c.chat(VoiceBriefShape, {
+    system:
+      "You shape voice notes into team briefs. You never invent facts, numbers, or promises. Reply JSON only.",
+    user: [
+      "Turn this spoken voice note into today's team brief.",
+      'Reply JSON: {"language": "<language name, e.g. Spanish>", "original": "<the note as said, cleaned of filler>", "english": "<English version, or the same text when already English>"}.',
+      "Rules: do not add facts, numbers or promises the owner did not say. Keep their meaning; cut filler.",
+      "Voice note:",
+      `"""${clean}"""`,
+    ].join("\n"),
+    temperature: 0.3,
+  });
+  return {
+    language: res.data.language.trim().slice(0, 40) || "unknown",
+    original: res.data.original.trim() || clean,
+    english: res.data.english.trim() || clean,
+  };
 }
 
 function sseResponse(body: ReadableStream<Uint8Array> | string): Response {
