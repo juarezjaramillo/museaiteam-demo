@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type GoalRow, type MetricPoint, type TimelineEntry } from "../api.js";
+import { API_BASE, api, type GoalRow, type MetricPoint, type TimelineEntry } from "../api.js";
+import { VoiceInput, type VoiceMeta } from "./VoiceInput.js";
 import { PULL_CATALOG, dateLabel, eventLabel, kindLabel, modeLabel, providerLabel, roleLabel, scheduleLabel, sessionTitle, shipCount, statusLabel } from "@museaiteam/shared";
 
 function Chart({ series }: { series: MetricPoint[] }) {
@@ -49,12 +50,32 @@ function Chart({ series }: { series: MetricPoint[] }) {
 function GoalForm({ org, onDone }: { org: string; onDone: (id: string) => void }) {
   const [title, setTitle] = useState("");
   const [metric, setMetric] = useState("");
+  const [brief, setBrief] = useState("");
   const [source, setSource] = useState("");
   const [target, setTarget] = useState("");
   const [deadline, setDeadline] = useState("");
   const [schedule, setSchedule] = useState("weekly:1");
   const [mode, setMode] = useState("posthoc");
   const [error, setError] = useState("");
+  const [voice, setVoice] = useState<{ key: string; text: string; language: string } | null>(null);
+  const [shaped, setShaped] = useState(false);
+  const [shaping, setShaping] = useState(false);
+
+  async function onVoice(text: string, meta: VoiceMeta) {
+    setShaping(true);
+    try {
+      const s = await api.shapeVoiceGoal(org, text);
+      setTitle((t) => (t.trim() ? `${t} / ${s.title}` : s.title));
+      if (s.metric) setMetric((m) => (m.trim() ? `${m}, ${s.metric}` : s.metric));
+      if (s.briefNote) setBrief((b) => (b.trim() ? `${b}\n${s.briefNote}` : s.briefNote));
+      setVoice({ key: meta.audioKey, text, language: s.language });
+      setShaped(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setShaping(false);
+    }
+  }
 
   async function submit() {
     setError("");
@@ -63,11 +84,19 @@ function GoalForm({ org, onDone }: { org: string; onDone: (id: string) => void }
       const { id } = await api.createGoal(org, {
         title,
         metricName: metric.trim() || undefined,
+        briefNote: brief.trim() || undefined,
         metricSource: source.trim() || undefined,
         metricTarget: num(target),
         deadline: deadline.trim() || undefined,
         schedule,
         approvalMode: mode,
+        ...(voice
+          ? {
+              voiceKey: voice.key,
+              originalText: voice.text,
+              originalLanguage: voice.language,
+            }
+          : {}),
       });
       onDone(id);
     } catch (e) {
@@ -79,9 +108,16 @@ function GoalForm({ org, onDone }: { org: string; onDone: (id: string) => void }
     <div className="card card-hi">
       <h3>New goal</h3>
       {error && <p className="error">{error}</p>}
+      <p className="dim">Tell your team the goal</p>
+      <VoiceInput org={org} context="goal" onTranscript={(text, meta) => void onVoice(text, meta)} />
+      {shaping && <p className="dim">Shaping with Muse Spark…</p>}
+      {shaped && !shaping && <p className="dim">Shaped by Muse Spark</p>}
       <input className="goal" placeholder="Goal title (8+ characters)" value={title} onChange={(e) => setTitle(e.target.value)} />
       <div className="row">
         <label>Number <input value={metric} onChange={(e) => setMetric(e.target.value)} placeholder="e.g. trial activations" /></label>
+      </div>
+      <div className="row">
+        <label>Brief note <textarea rows={2} value={brief} onChange={(e) => setBrief(e.target.value)} placeholder="What should the team know?" /></label>
       </div>
       <details>
         <summary>More options</summary>
@@ -186,6 +222,23 @@ export function GoalDetail({
         <span className="dim">{scheduleLabel(goal.schedule)} · {modeLabel(goal.approval_mode)}</span>
         {dateLabel(goal.deadline) && <span className="dim">due {dateLabel(goal.deadline)}</span>}
       </div>
+      {(goal.brief_note || goal.voice_key) && (
+        <section>
+          <h2>Brief</h2>
+          {goal.brief_note && <p>{goal.brief_note}</p>}
+          {goal.voice_key && (
+            <p>
+              <a
+                href={`${API_BASE}/api/orgs/${org}/voice/${goal.voice_key}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                ▶ Voice note
+              </a>
+            </p>
+          )}
+        </section>
+      )}
       <div className="row">
         <label>How often
           <select value={goal.schedule} onChange={(e) => act(() => api.patchGoal(org, goalId, { schedule: e.target.value }))}>

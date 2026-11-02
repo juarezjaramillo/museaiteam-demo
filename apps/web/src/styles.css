@@ -1470,3 +1470,26 @@ table.guards input.narrow {
   color: var(--bad);
   margin: var(--s2) 0 0;
 }
+
+.voice-original {
+  margin: var(--s2) 0;
+}
+
+.voice-original-label {
+  font-size: 0.8rem;
+  margin: 0 0 var(--s1);
+}
+
+.voice-original-text {
+  margin: 0;
+  font-style: italic;
+  quotes: "“" "”";
+}
+
+.voice-original-text::before {
+  content: open-quote;
+}
+
+.voice-original-text::after {
+  content: close-quote;
+}

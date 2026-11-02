@@ -967,6 +967,7 @@ export class FakeDB {
               voice_key: (p[11] as string | null) ?? null,
               original_text: (p[12] as string | null) ?? null,
               original_language: (p[13] as string | null) ?? null,
+              brief_note: (p[14] as string | null) ?? null,
             });
             return { meta: { changes: 1 } };
           }

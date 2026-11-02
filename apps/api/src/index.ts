@@ -55,7 +55,7 @@ import { runBaseline } from "./baseline.js";
 import { BoxOffline, BoxQuota, boxSpend, provider, reconcileBoxes } from "./box.js";
 import { audit, getRun } from "./db.js";
 import { servePublicImage } from "./creative.js";
-import { shapeVoiceNote, transcribeUpload } from "./voice.js";
+import { serveVoiceAudio, shapeVoiceNote, transcribeUpload } from "./voice.js";
 import { nudgeSeatRequests, teamSeats } from "./enroll.js";
 import { getSeat, listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
 import {
@@ -1865,6 +1865,16 @@ app.post(
   },
 );
 
+// Voice-note playback. The key holds slashes, so this is a wildcard;
+// the handler still pins it under the member's own org folder.
+app.get("/api/orgs/:org/voice/*", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const at = c.req.path.indexOf("/voice/");
+  const key = at >= 0 ? c.req.path.slice(at + "/voice/".length) : "";
+  return serveVoiceAudio(c.env, org, key);
+});
+
 app.post("/api/orgs/:org/teams/:teamId/review", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
   if (!org) return c.json({ error: "forbidden" }, 403);
@@ -1900,6 +1910,7 @@ app.post(
       voiceKey: z.string().max(200).optional(),
       originalText: z.string().max(4000).optional(),
       originalLanguage: z.string().max(40).optional(),
+      briefNote: z.string().max(2000).optional(),
     }),
   ),
   async (c) => {

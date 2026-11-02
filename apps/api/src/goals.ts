@@ -17,6 +17,7 @@ export interface Goal {
   voice_key: string | null;
   original_text: string | null;
   original_language: string | null;
+  brief_note: string | null;
   title: string;
   metric_name: string | null;
   metric_source: string | null;
@@ -37,6 +38,7 @@ export interface GoalInput {
   voiceKey?: string;
   originalText?: string;
   originalLanguage?: string;
+  briefNote?: string;
   title: string;
   metricName?: string;
   metricSource?: string;
@@ -71,6 +73,7 @@ function parseGoal(row: Record<string, unknown> & { id: string }): Goal {
     voice_key: (row.voice_key as string | null) ?? null,
     original_text: (row.original_text as string | null) ?? null,
     original_language: (row.original_language as string | null) ?? null,
+    brief_note: (row.brief_note as string | null) ?? null,
     title: String(row.title),
     metric_name: (row.metric_name as string | null) ?? null,
     metric_source: (row.metric_source as string | null) ?? null,
@@ -92,6 +95,7 @@ interface CleanGoal {
   voiceKey: string | null;
   originalText: string | null;
   originalLanguage: string | null;
+  briefNote: string | null;
   title: string;
   metricName?: string;
   metricSource?: string;
@@ -122,6 +126,7 @@ function checked(input: GoalInput): CleanGoal {
     voiceKey: input.voiceKey?.trim().slice(0, 200) || null,
     originalText: input.originalText?.trim().slice(0, 4000) || null,
     originalLanguage: input.originalLanguage?.trim().slice(0, 40) || null,
+    briefNote: input.briefNote?.trim().slice(0, 2000) || null,
     title,
     metricName: input.metricName,
     // No metric at all stays null; a named metric without a source gets
@@ -150,8 +155,8 @@ export async function createGoal(
   await env.DB.prepare(
     `INSERT INTO goals (id, org_id, team_id, title, metric_name, metric_source,
       metric_baseline, metric_target, deadline, schedule, approval_mode,
-      voice_key, original_text, original_language)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      voice_key, original_text, original_language, brief_note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -168,6 +173,7 @@ export async function createGoal(
       g.voiceKey,
       g.originalText,
       g.originalLanguage,
+      g.briefNote,
     )
     .run();
   // The squad staffs lazily at the first work run (§2 claim) so creation

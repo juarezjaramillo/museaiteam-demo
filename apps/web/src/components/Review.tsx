@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { api, type ReviewPayload } from "../api.js";
+import { API_BASE, api, type ReviewPayload } from "../api.js";
+import { VoiceInput, type VoiceMeta } from "./VoiceInput.js";
 import { SUPPORT_BRIEF_TEMPLATE, SUPPORT_METRIC, actionLabel, statusLabel } from "@museaiteam/shared";
 
 export function Review({ org, teamId, onBack }: { org: string; teamId: string; onBack: () => void }) {
   const [data, setData] = useState<ReviewPayload | null>(null);
   const [brief, setBrief] = useState("");
   const [msg, setMsg] = useState("");
+  const [voice, setVoice] = useState<{ key: string; text: string; language: string } | null>(null);
+  const [original, setOriginal] = useState<{ text: string; language: string } | null>(null);
 
   async function load() {
     const r = await api.getReview(org, teamId);
@@ -21,9 +24,28 @@ export function Review({ org, teamId, onBack }: { org: string; teamId: string; o
   async function saveBrief() {
     setMsg("");
     try {
-      const b = await api.putBrief(org, teamId, brief);
+      const b = await api.putBrief(
+        org,
+        teamId,
+        brief,
+        voice
+          ? { voiceKey: voice.key, originalText: voice.text, originalLanguage: voice.language }
+          : undefined,
+      );
       setData((d) => (d ? { ...d, brief: b } : d));
       setMsg("Saved — tonight's work follows this brief.");
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  async function onVoice(text: string, meta: VoiceMeta) {
+    setMsg("");
+    try {
+      const s = await api.shapeVoiceBrief(org, text);
+      setBrief((b) => (b.trim() ? `${b}\n${s.english}` : s.english));
+      setOriginal(s.language === "English" ? null : { text: s.original, language: s.language });
+      setVoice({ key: meta.audioKey, text: s.original, language: s.language });
     } catch (e) {
       setMsg(String(e));
     }
@@ -107,6 +129,7 @@ export function Review({ org, teamId, onBack }: { org: string; teamId: string; o
           <span className="dim">Suggested metric: {SUPPORT_METRIC.name}.</span>
         </p>
       )}
+      <VoiceInput org={org} context="brief" onTranscript={(text, meta) => void onVoice(text, meta)} />
       <textarea
         aria-label="Today's brief"
         rows={3}
@@ -114,6 +137,23 @@ export function Review({ org, teamId, onBack }: { org: string; teamId: string; o
         placeholder="Today matters: the Acme tickets and the refund queue."
         onChange={(e) => setBrief(e.target.value)}
       />
+      {original && (
+        <div className="voice-original">
+          <p className="dim voice-original-label">Original ({original.language})</p>
+          <p className="voice-original-text">{original.text}</p>
+        </div>
+      )}
+      {data.brief.voiceKey && (
+        <p>
+          <a
+            href={`${API_BASE}/api/orgs/${org}/voice/${data.brief.voiceKey}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            ▶ Voice note
+          </a>
+        </p>
+      )}
       <div className="row">
         <button className="sm" onClick={saveBrief}>
           Save brief

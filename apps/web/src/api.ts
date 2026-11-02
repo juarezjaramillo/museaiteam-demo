@@ -34,7 +34,13 @@ export interface TeamRow {
 export interface ReviewPayload {
   team: { id: string; name: string; ownerUserId: string | null };
   day: string;
-  brief: { text: string; reviewedAt: string | null };
+  brief: {
+    text: string;
+    reviewedAt: string | null;
+    voiceKey: string | null;
+    originalText: string | null;
+    originalLanguage: string | null;
+  };
   overnight: Array<{ id: string; goal: string; status: string; kind: string; createdAt: string }>;
   pending: Array<{ id: string; runId: string; kind: string; target: string; runGoal: string }>;
 }
@@ -87,6 +93,10 @@ export interface CreateRunInput {
 export interface GoalRow {
   id: string;
   team_id: string | null;
+  voice_key: string | null;
+  original_text: string | null;
+  original_language: string | null;
+  brief_note: string | null;
   title: string;
   metric_name: string | null;
   metric_source: string | null;
@@ -364,10 +374,25 @@ export const api = {
     }),
   getReview: (org: string, teamId: string) =>
     req<ReviewPayload>(`/api/orgs/${org}/teams/${teamId}/review`),
-  putBrief: (org: string, teamId: string, text: string) =>
-    req<{ text: string; reviewedAt: string | null }>(`/api/orgs/${org}/teams/${teamId}/brief`, {
+  putBrief: (
+    org: string,
+    teamId: string,
+    text: string,
+    voice?: { voiceKey?: string; originalText?: string; originalLanguage?: string },
+  ) =>
+    req<ReviewPayload["brief"]>(`/api/orgs/${org}/teams/${teamId}/brief`, {
       method: "PUT",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...voice }),
+    }),
+  shapeVoiceGoal: (org: string, text: string) =>
+    req<{ language: string; title: string; metric: string; briefNote: string; english: string }>(
+      `/api/orgs/${org}/voice/shape`,
+      { method: "POST", body: JSON.stringify({ text, context: "goal" }) },
+    ),
+  shapeVoiceBrief: (org: string, text: string) =>
+    req<{ language: string; original: string; english: string }>(`/api/orgs/${org}/voice/shape`, {
+      method: "POST",
+      body: JSON.stringify({ text, context: "brief" }),
     }),
   markReviewed: (org: string, teamId: string) =>
     req<{ ok: boolean }>(`/api/orgs/${org}/teams/${teamId}/review`, { method: "POST" }),

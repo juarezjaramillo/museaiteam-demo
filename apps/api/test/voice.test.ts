@@ -5,6 +5,7 @@ import { requireSession } from "../src/auth.js";
 import {
   _resetVoiceCaches,
   isWav,
+  serveVoiceAudio,
   shapeVoiceNote,
   transcribeUpload,
   voiceKeywords,
@@ -409,11 +410,13 @@ describe("voice fields on goals and briefs", () => {
       voiceKey: "voice/org1/a.wav",
       originalText: "spoken words here",
       originalLanguage: "Spanish",
+      briefNote: "Ready the store with a returning-customer discount.",
     });
     expect(await getGoal(env, ORG, id)).toMatchObject({
       voice_key: "voice/org1/a.wav",
       original_text: "spoken words here",
       original_language: "Spanish",
+      brief_note: "Ready the store with a returning-customer discount.",
     });
   });
 
@@ -433,6 +436,24 @@ describe("voice fields on goals and briefs", () => {
       originalText: "Oigan, también contesten los tickets en español.",
       originalLanguage: "Spanish",
     });
+  });
+});
+
+describe("serveVoiceAudio", () => {
+  it("serves org keys, 404s anything else", async () => {
+    const tables = blankTables();
+    const r2 = fakeR2();
+    const key = "voice/org1/note.wav";
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    r2.store.set(key, bytes);
+    const env = { DB: new FakeDB(tables), ARTIFACTS: r2.bucket } as unknown as Env;
+    const ok = await serveVoiceAudio(env, ORG, key);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toBe("audio/wav");
+    expect((await ok.arrayBuffer()).byteLength).toBe(4);
+    expect((await serveVoiceAudio(env, ORG, "voice/org1/missing.wav")).status).toBe(404);
+    expect((await serveVoiceAudio(env, ORG, "voice/other/note.wav")).status).toBe(404);
+    expect((await serveVoiceAudio(env, ORG, "creative/org1/1.png")).status).toBe(404);
   });
 });
 

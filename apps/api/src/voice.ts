@@ -180,6 +180,28 @@ export async function shapeVoiceNote(
   };
 }
 
+/**
+ * Voice-note playback: the key must live under this org's folder.
+ * 404 for anything else (never reveal whether a foreign key exists).
+ */
+export async function serveVoiceAudio(
+  env: Env,
+  orgId: string,
+  key: string,
+): Promise<Response> {
+  if (!key.startsWith(`voice/${orgId}/`)) {
+    return new Response("not found", { status: 404 });
+  }
+  const obj = await env.ARTIFACTS.get(key);
+  if (!obj) return new Response("not found", { status: 404 });
+  return new Response(obj.body, {
+    headers: {
+      "content-type": "audio/wav",
+      "cache-control": "private, max-age=3600",
+    },
+  });
+}
+
 function sseResponse(body: ReadableStream<Uint8Array> | string): Response {
   return new Response(body, {
     headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
