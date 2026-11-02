@@ -1,6 +1,7 @@
 name = "museaiteam-api"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
+compatibility_flags = [ "nodejs_compat_v2" ]
 
 [vars]
 APP_URL = "https://museaiteam-api.juarezjaramillo.workers.dev"
@@ -33,6 +34,9 @@ index_name = "org-memory"
 
 [ai]
 binding = "AI"
+
+[browser]
+binding = "BROWSER"
 
 [[durable_objects.bindings]]
 name = "FEED"
