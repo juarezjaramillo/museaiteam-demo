@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type RunDetail, type RunListRow } from "../api.js";
 import { ThumbDown, ThumbUp } from "./icons.js";
 import {
@@ -8,6 +8,7 @@ import {
   isHiddenAction,
   kindLabel,
   ownerFor,
+  scaleBox,
   sessionTitle,
   shipCount,
   statusLabel,
@@ -23,6 +24,79 @@ function parseProof(raw: string | null): Proof | null {
   } catch {
     return null;
   }
+}
+
+function ProofImage({ proof }: { proof: Proof }) {
+  const img = proof.image!;
+  const [showBefore, setShowBefore] = useState(false);
+  const [size, setSize] = useState<{ w: number; h: number; ratio: string } | null>(null);
+  const ref = useRef<HTMLImageElement>(null);
+  const src = showBefore && proof.beforeImage ? proof.beforeImage : img.url;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return;
+      const ratio =
+        el.naturalWidth > 0 && el.naturalHeight > 0
+          ? `${el.naturalWidth} / ${el.naturalHeight}`
+          : `${r.width} / ${r.height}`;
+      setSize((prev) =>
+        prev && Math.abs(prev.w - r.width) < 0.5 && Math.abs(prev.h - r.height) < 0.5
+          ? prev
+          : { w: r.width, h: r.height, ratio },
+      );
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [src]);
+
+  return (
+    <div className="proof-img">
+      {proof.beforeImage && (
+        <div className="row">
+          <button className="sm" disabled={!showBefore} onClick={() => setShowBefore(false)}>
+            After
+          </button>
+          <button className="sm" disabled={showBefore} onClick={() => setShowBefore(true)}>
+            Before
+          </button>
+        </div>
+      )}
+      <a className="proof-img-link" href={src} target="_blank" rel="noreferrer">
+        <span
+          className="proof-img-frame"
+          style={size ? { aspectRatio: size.ratio } : undefined}
+        >
+          <img ref={ref} src={src} alt="Image checked by Muse Spark vision" />
+          {!showBefore &&
+            size &&
+            img.boxes.map((b, i) => {
+              const s = scaleBox(b.box, size.w, size.h);
+              return (
+                <span
+                  key={i}
+                  className={b.ok ? "proof-box ok" : "proof-box"}
+                  style={{ left: s.x, top: s.y, width: s.width, height: s.height }}
+                >
+                  <span className="proof-chip">{b.label}</span>
+                </span>
+              );
+            })}
+        </span>
+      </a>
+      {proof.visionSummary && (
+        <p className="dim proof-vision">
+          <span className="proof-vision-text">{proof.visionSummary}</span>
+          <span className="badge soft">Muse Spark vision</span>
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function RunDetailView({
@@ -185,6 +259,7 @@ export function RunDetailView({
                     ) : a.status === "done" ? (
                       <p className="dim">no proof recorded</p>
                     ) : null}
+                    {proof?.image && <ProofImage proof={proof} />}
                     {href || proof?.url ? (
                       <a href={(href ?? proof!.url)!} target="_blank" rel="noreferrer">
                         Open it ↗

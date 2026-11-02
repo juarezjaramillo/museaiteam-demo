@@ -1338,3 +1338,79 @@ table.guards input.narrow {
   font-weight: 700;
   font-family: var(--font-display);
 }
+
+/* ---------- Proof images: verified visuals with fact boxes ---------- */
+
+.proof-img {
+  max-width: 520px;
+  margin: var(--s3) 0;
+}
+
+.proof-img .row {
+  margin-bottom: var(--s2);
+}
+
+.proof-img-link {
+  display: block;
+}
+
+.proof-img-frame {
+  position: relative;
+  display: block;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--line);
+  min-height: 200px;
+}
+
+.proof-img-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.proof-box {
+  position: absolute;
+  border: 2px solid var(--bad);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.proof-box.ok {
+  border-color: var(--good);
+}
+
+.proof-chip {
+  position: absolute;
+  left: -2px;
+  bottom: calc(100% + 2px);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  background: var(--ink);
+  color: #fff;
+  padding: 0.1rem 0.4rem;
+  border-radius: 6px;
+}
+
+.proof-box.ok .proof-chip {
+  background: var(--good);
+}
+
+.proof-box:not(.ok) .proof-chip {
+  background: var(--bad);
+}
+
+.proof-vision {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s2) 0 0;
+}
+
+.proof-vision-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
