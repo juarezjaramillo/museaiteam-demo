@@ -23,5 +23,6 @@ export * from "./proof.js";
 export * from "./mcp-catalog.js";
 export * from "./triggers.js";
 export * from "./seat-email.js";
+export * from "./briefs.js";
 export * from "./seat-map.js";
 export * from "./box.js";

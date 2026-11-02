@@ -112,3 +112,30 @@ describe("brief + review ritual", () => {
     expect(teams.find((t) => t.id === "t2")?.review).toBe("never");
   });
 });
+
+describe("member scoping", () => {
+  it("unscoped reads see every team", async () => {
+    const { env: e } = env();
+    await setTeamOwner(e, "org1", "t1", "u-sam");
+    expect((await listTeams(e, "org1")).map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("scoped reads see only owned teams", async () => {
+    const { env: e } = env();
+    await setTeamOwner(e, "org1", "t1", "u-sam");
+    expect((await listTeams(e, "org1", "u-sam")).map((t) => t.id)).toEqual(["t1"]);
+    expect(await listTeams(e, "org1", "u-owner")).toEqual([]);
+  });
+
+  it("foreign teams 404 on brief and review reads and writes", async () => {
+    const { env: e } = env();
+    await setTeamOwner(e, "org1", "t1", "u-sam");
+    await putBrief(e, "org1", "t1", "sam's brief", undefined, "u-sam");
+    expect((await getBrief(e, "org1", "t1", undefined, "u-sam")).text).toBe("sam's brief");
+    await expect(getBrief(e, "org1", "t1", undefined, "u-owner")).rejects.toBeInstanceOf(BadRole);
+    await expect(putBrief(e, "org1", "t1", "x", undefined, "u-owner")).rejects.toBeInstanceOf(BadRole);
+    await expect(markReviewed(e, "org1", "t1", undefined, "u-owner")).rejects.toBeInstanceOf(BadRole);
+    await expect(reviewPayload(e, "org1", "t1", "u-owner")).rejects.toBeInstanceOf(BadRole);
+    expect((await reviewPayload(e, "org1", "t1", "u-sam")).team.name).toBe("Team 1");
+  });
+});

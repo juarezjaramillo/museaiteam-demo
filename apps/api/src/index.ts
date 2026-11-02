@@ -199,6 +199,18 @@ async function roleOrg(
   return org;
 }
 
+/**
+ * Team-route scope: owners see everything, members only their own
+ * teams. The id funnels into teams.ts, where the queries enforce it.
+ */
+async function teamScope(
+  c: Context<AppEnv>,
+  org: string,
+): Promise<string | undefined> {
+  const role = await memberRole(c.env, org, c.get("user").id);
+  return role === "owner" ? undefined : c.get("user").id;
+}
+
 /** Run-route guard: 404 for strangers, 403 for under-roled members. */
 async function runRole(
   c: Context<AppEnv>,
@@ -1693,7 +1705,7 @@ app.get("/api/orgs/:org/shopify/products", async (c) => {
 app.get("/api/orgs/:org/teams", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
   if (!org) return c.json({ error: "forbidden" }, 403);
-  return c.json({ teams: await listTeams(c.env, org) });
+  return c.json({ teams: await listTeams(c.env, org, await teamScope(c, org)) });
 });
 
 app.post(
@@ -1778,7 +1790,7 @@ app.get("/api/orgs/:org/teams/:teamId/review", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
   if (!org) return c.json({ error: "forbidden" }, 403);
   try {
-    return c.json(await reviewPayload(c.env, org, c.req.param("teamId")));
+    return c.json(await reviewPayload(c.env, org, c.req.param("teamId"), await teamScope(c, org)));
   } catch (err) {
     if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);
     throw err;
@@ -1792,8 +1804,9 @@ app.put(
     const org = await roleOrg(c, ...EVERYONE);
     if (!org) return c.json({ error: "forbidden" }, 403);
     try {
-      await putBrief(c.env, org, c.req.param("teamId"), c.req.valid("json").text);
-      return c.json(await getBrief(c.env, org, c.req.param("teamId")));
+      const scope = await teamScope(c, org);
+      await putBrief(c.env, org, c.req.param("teamId"), c.req.valid("json").text, undefined, scope);
+      return c.json(await getBrief(c.env, org, c.req.param("teamId"), undefined, scope));
     } catch (err) {
       if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);
       throw err;
@@ -1805,7 +1818,7 @@ app.post("/api/orgs/:org/teams/:teamId/review", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
   if (!org) return c.json({ error: "forbidden" }, 403);
   try {
-    await markReviewed(c.env, org, c.req.param("teamId"));
+    await markReviewed(c.env, org, c.req.param("teamId"), undefined, await teamScope(c, org));
     return c.json({ ok: true });
   } catch (err) {
     if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);

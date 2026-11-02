@@ -26,12 +26,27 @@ export interface Team {
   seats: Seat[];
 }
 
-export async function listTeams(env: Env, orgId: string): Promise<Team[]> {
-  const teams = await env.DB.prepare(
-    "SELECT id, name, owner_user_id FROM teams WHERE org_id = ? ORDER BY rowid",
-  )
-    .bind(orgId)
-    .all<{ id: string; name: string; owner_user_id: string | null }>();
+/**
+ * Owner sees all teams; a scoped member sees only their own. The scope
+ * lives in the query, so no UI or future route can leak a foreign team
+ * by forgetting a check.
+ */
+export async function listTeams(
+  env: Env,
+  orgId: string,
+  memberId?: string,
+): Promise<Team[]> {
+  const teams = memberId
+    ? await env.DB.prepare(
+        "SELECT id, name, owner_user_id FROM teams WHERE org_id = ? AND owner_user_id = ? ORDER BY rowid",
+      )
+        .bind(orgId, memberId)
+        .all<{ id: string; name: string; owner_user_id: string | null }>()
+    : await env.DB.prepare(
+        "SELECT id, name, owner_user_id FROM teams WHERE org_id = ? ORDER BY rowid",
+      )
+        .bind(orgId)
+        .all<{ id: string; name: string; owner_user_id: string | null }>();
   const out: Team[] = [];
   for (const t of teams.results ?? []) {
     const seats = await env.DB.prepare(
@@ -113,6 +128,32 @@ export async function teamInOrg(
     .bind(teamId, orgId)
     .first<{ id: string }>();
   return row !== null;
+}
+
+interface VisibleTeam {
+  id: string;
+  name: string;
+  owner_user_id: string | null;
+}
+
+/**
+ * The team row when `memberId` may see it, else null. A foreign team
+ * is indistinguishable from a missing one: scoped reads 404 alike.
+ */
+async function visibleTeam(
+  env: Env,
+  orgId: string,
+  teamId: string,
+  memberId?: string,
+): Promise<VisibleTeam | null> {
+  const row = await env.DB.prepare(
+    "SELECT id, name, owner_user_id FROM teams WHERE id = ? AND org_id = ?",
+  )
+    .bind(teamId, orgId)
+    .first<VisibleTeam>();
+  if (!row) return null;
+  if (memberId && row.owner_user_id !== memberId) return null;
+  return row;
 }
 
 export class DuplicateSeat extends Error {}
@@ -312,8 +353,9 @@ export async function getBrief(
   orgId: string,
   teamId: string,
   day = todayDay(),
+  memberId?: string,
 ): Promise<TeamBrief> {
-  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  if (!(await visibleTeam(env, orgId, teamId, memberId))) throw new BadRole("unknown team");
   return briefRow(env, teamId, day);
 }
 
@@ -324,8 +366,9 @@ export async function putBrief(
   teamId: string,
   text: string,
   day = todayDay(),
+  memberId?: string,
 ): Promise<void> {
-  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  if (!(await visibleTeam(env, orgId, teamId, memberId))) throw new BadRole("unknown team");
   await env.DB.prepare(
     `INSERT INTO team_briefs (team_id, day, text, updated_at)
      VALUES (?, ?, ?, datetime('now'))
@@ -342,8 +385,9 @@ export async function markReviewed(
   orgId: string,
   teamId: string,
   day = todayDay(),
+  memberId?: string,
 ): Promise<void> {
-  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  if (!(await visibleTeam(env, orgId, teamId, memberId))) throw new BadRole("unknown team");
   await env.DB.prepare(
     `INSERT INTO team_briefs (team_id, day, text, reviewed_at, updated_at)
      VALUES (?, ?, '', datetime('now'), datetime('now'))
@@ -421,12 +465,9 @@ export async function reviewPayload(
   env: Env,
   orgId: string,
   teamId: string,
+  memberId?: string,
 ): Promise<ReviewPayload> {
-  const team = await env.DB.prepare(
-    "SELECT id, name, owner_user_id FROM teams WHERE id = ? AND org_id = ?",
-  )
-    .bind(teamId, orgId)
-    .first<{ id: string; name: string; owner_user_id: string | null }>();
+  const team = await visibleTeam(env, orgId, teamId, memberId);
   if (!team) throw new BadRole("unknown team");
   const day = todayDay();
   const last = (await lastReviewedAt(env, teamId)) ?? "";

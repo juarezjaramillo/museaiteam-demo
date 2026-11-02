@@ -59,6 +59,13 @@ const FIX = {
       { id: "a9", runId: "run1", kind: "hubspot.update_ticket", target: "Ticket #4821", runGoal: "Answer the overnight ticket queue" },
     ],
   },
+  "/api/orgs/o1/teams/t2/review": {
+    team: { id: "t2", name: "Team 2", ownerUserId: null },
+    day: "2026-10-29",
+    brief: { text: "", reviewedAt: null },
+    overnight: [],
+    pending: [],
+  },
   "/api/orgs/o1/notifications?unread=1": { notifications: [{ id: "n1", kind: "seat.requested", title: "Sam (AI) asked for Linear, GitHub", body: "Needs your approval", link: "/approvals", read: 0, createdAt: "" }] },
   "/api/orgs/o1/team/seats": { seats, meanwhile: ["waiting on the hire's own Linear seat"] },
   "/api/orgs/o1/hires": { hires: [{ role: "engineer", runs: 4, proposals: 6, votes: 9, shipped: 5, up: 3, down: 0, tokens: 120000, tokensEstimated: false }] },
@@ -277,6 +284,24 @@ if (tab === "teams") {
     }
   }
   await page.screenshot({ path: "/tmp/shots/teams-review.png" });
+  for (const b of await page.$$("button")) {
+    const t = await b.evaluate((el) => el.textContent);
+    if (t?.includes("All teams")) {
+      await b.click();
+      await new Promise((r) => setTimeout(r, 800));
+      break;
+    }
+  }
+  const reviews = [];
+  for (const b of await page.$$("button")) {
+    const t = await b.evaluate((el) => el.textContent);
+    if (t?.trim() === "Review") reviews.push(b);
+  }
+  if (reviews[1]) {
+    await reviews[1].click();
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  await page.screenshot({ path: "/tmp/shots/teams-review-empty.png" });
 }
 // Fixtures always describe a signed-in founder: a Sign in link means the
 // mocks silently stopped applying and the shot would prove nothing.

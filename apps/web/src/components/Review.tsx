@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type ReviewPayload } from "../api.js";
-import { actionLabel, statusLabel } from "@museaiteam/shared";
+import { SUPPORT_BRIEF_TEMPLATE, SUPPORT_METRIC, actionLabel, statusLabel } from "@museaiteam/shared";
 
 export function Review({ org, teamId, onBack }: { org: string; teamId: string; onBack: () => void }) {
   const [data, setData] = useState<ReviewPayload | null>(null);
@@ -99,6 +99,14 @@ export function Review({ org, teamId, onBack }: { org: string; teamId: string; o
 
       <h2>Today's brief</h2>
       <p className="page-sub">Tell the team what matters today. They read this before tonight's work.</p>
+      {brief.trim() === "" && (
+        <p>
+          <button className="sm" onClick={() => setBrief(SUPPORT_BRIEF_TEMPLATE)}>
+            Start from the support template
+          </button>{" "}
+          <span className="dim">Suggested metric: {SUPPORT_METRIC.name}.</span>
+        </p>
+      )}
       <textarea
         aria-label="Today's brief"
         rows={3}

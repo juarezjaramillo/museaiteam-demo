@@ -481,6 +481,9 @@ export class FakeDB {
           if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ?")) {
             return { results: t.mcp_servers.filter((r) => r.org_id === p[0]) as T[] };
           }
+          if (q.startsWith("SELECT id, name, owner_user_id FROM teams WHERE org_id = ? AND owner_user_id = ?")) {
+            return { results: t.teams.filter((x) => x.org_id === p[0] && x.owner_user_id === p[1]) as T[] };
+          }
           if (q.startsWith("SELECT id, name, owner_user_id FROM teams WHERE org_id = ?")) {
             return { results: t.teams.filter((x) => x.org_id === p[0]) as T[] };
           }
