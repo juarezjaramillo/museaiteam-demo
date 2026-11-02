@@ -39,6 +39,27 @@ export class LengthCutoff extends Error {
   }
 }
 
+function bytesToDataUrl(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return `data:image/png;base64,${btoa(bin)}`;
+}
+
+function dataUrlBytes(url: string): Uint8Array {
+  const comma = url.indexOf(",");
+  const bin = atob((comma >= 0 ? url.slice(comma + 1) : url).replace(/\s/g, ""));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function parseResponse<T>(
   schema: z.ZodType<T>,
   json: ChatResponse,
@@ -111,6 +132,67 @@ export class SparkClient {
       system: opts.system,
       user: opts.user,
     };
+    return this.execute(schema, req, [
+      { role: "system", content: opts.system },
+      { role: "user", content: opts.user },
+    ]);
+  }
+
+  /**
+   * Vision call: text plus one or more images (PNG bytes or data
+   * URLs), same metering and record/replay as chat. Replay keys
+   * include a hash of each image's bytes, in order.
+   */
+  async chatWithImages<T>(
+    schema: z.ZodType<T>,
+    opts: {
+      system: string;
+      user: string;
+      images: Array<Uint8Array | string>;
+      temperature: number;
+      model?: string;
+      maxTokens?: number;
+    },
+  ): Promise<SparkResult<T>> {
+    const urls: string[] = [];
+    const hashes: string[] = [];
+    for (const img of opts.images) {
+      const bytes = typeof img === "string" ? dataUrlBytes(img) : img;
+      hashes.push(await sha256Hex(bytes));
+      urls.push(
+        typeof img === "string" && img.startsWith("data:")
+          ? img
+          : bytesToDataUrl(bytes),
+      );
+    }
+    const req: SparkRequest = {
+      model: opts.model ?? DEFAULT_MODEL,
+      temperature: opts.temperature,
+      max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+      system: opts.system,
+      user: opts.user,
+      images: hashes,
+    };
+    return this.execute(schema, req, [
+      { role: "system", content: opts.system },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: opts.user },
+          ...urls.map((url) => ({
+            type: "image_url",
+            image_url: { url },
+          })),
+        ],
+      },
+    ]);
+  }
+
+  private async execute<T>(
+    schema: z.ZodType<T>,
+    req: SparkRequest,
+    messages: Array<{ role: string; content: unknown }>,
+  ): Promise<SparkResult<T>> {
     const key = await replayKeyFor(req);
 
     if (this.mode === "replay") {
@@ -133,10 +215,7 @@ export class SparkClient {
         // Wire body is explicit: internal keying fields must never leak here.
         body: JSON.stringify({
           model: req.model,
-          messages: [
-            { role: "system", content: opts.system },
-            { role: "user", content: opts.user },
-          ],
+          messages,
           temperature: req.temperature,
           max_tokens: budget,
           response_format: { type: "json_object" },

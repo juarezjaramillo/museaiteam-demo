@@ -4,6 +4,8 @@ export interface ReplayRequest {
   max_tokens: number;
   system: string;
   user: string;
+  /** Hex sha-256 of each input image's bytes, in order. Absent for text calls. */
+  images?: string[];
 }
 
 /** Deterministic fixture key: same request → same key, always. */
