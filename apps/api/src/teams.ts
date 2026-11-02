@@ -19,15 +19,16 @@ export interface Seat {
 export interface Team {
   id: string;
   name: string;
+  ownerUserId: string | null;
   seats: Seat[];
 }
 
 export async function listTeams(env: Env, orgId: string): Promise<Team[]> {
   const teams = await env.DB.prepare(
-    "SELECT id, name FROM teams WHERE org_id = ? ORDER BY rowid",
+    "SELECT id, name, owner_user_id FROM teams WHERE org_id = ? ORDER BY rowid",
   )
     .bind(orgId)
-    .all<{ id: string; name: string }>();
+    .all<{ id: string; name: string; owner_user_id: string | null }>();
   const out: Team[] = [];
   for (const t of teams.results ?? []) {
     const seats = await env.DB.prepare(
@@ -35,7 +36,7 @@ export async function listTeams(env: Env, orgId: string): Promise<Team[]> {
     )
       .bind(t.id)
       .all<Seat>();
-    out.push({ id: t.id, name: t.name, seats: seats.results ?? [] });
+    out.push({ id: t.id, name: t.name, ownerUserId: t.owner_user_id ?? null, seats: seats.results ?? [] });
   }
   return out;
 }
@@ -107,6 +108,66 @@ export async function teamInOrg(
 
 export class DuplicateSeat extends Error {}
 export class BadRole extends Error {}
+export class UnknownMember extends Error {}
+export class SeatFrozen extends Error {}
+
+/**
+ * Assign a team to a human member (or back to the founder's bench
+ * with null). The owner must already belong to the org: a team can
+ * never point at a stranger.
+ */
+export async function setTeamOwner(
+  env: Env,
+  orgId: string,
+  teamId: string,
+  userId: string | null,
+): Promise<void> {
+  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  if (userId) {
+    const member = await env.DB.prepare(
+      "SELECT user_id FROM org_members WHERE org_id = ? AND user_id = ?",
+    )
+      .bind(orgId, userId)
+      .first<{ user_id: string }>();
+    if (!member) throw new UnknownMember(userId);
+  }
+  await env.DB.prepare("UPDATE teams SET owner_user_id = ? WHERE id = ?")
+    .bind(userId, teamId)
+    .run();
+  await audit(env, null, "human", "team.owner", { org: orgId, team: teamId, owner: userId });
+}
+
+/**
+ * Move a hire between teams. The target team must not already hold
+ * the role (one PM per team) and frozen hires stay put.
+ */
+export async function moveSeat(
+  env: Env,
+  orgId: string,
+  seatId: string,
+  teamId: string,
+): Promise<void> {
+  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  const seat = await env.DB.prepare(
+    `SELECT s.id, s.team_id, s.role, s.frozen_at FROM seats s
+     JOIN teams t ON t.id = s.team_id WHERE s.id = ? AND t.org_id = ?`,
+  )
+    .bind(seatId, orgId)
+    .first<{ id: string; team_id: string; role: string; frozen_at: string | null }>();
+  if (!seat) throw new BadRole("unknown seat");
+  if (seat.frozen_at) throw new SeatFrozen(seatId);
+  if (seat.team_id === teamId) return;
+  const clash = await env.DB.prepare(
+    "SELECT id FROM seats WHERE team_id = ? AND role = ?",
+  )
+    .bind(teamId, seat.role)
+    .first<{ id: string }>();
+  if (clash) throw new DuplicateSeat(seat.role);
+  await env.DB.prepare("UPDATE seats SET team_id = ? WHERE id = ?")
+    .bind(teamId, seatId)
+    .run();
+  await audit(env, null, "human", "seat.moved", { org: orgId, seat: seatId, team: teamId });
+}
 
 /**
  * Founder hires a seat onto a team. Teams cap at 7: overflow lands on the

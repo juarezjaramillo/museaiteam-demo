@@ -32,6 +32,7 @@ export interface FakeTables {
   box_state: Row[];
   box_runs: Row[];
   seat_milestones: Row[];
+  org_members: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -61,6 +62,7 @@ export function blankTables(): FakeTables {
     box_state: [],
     box_runs: [],
     seat_milestones: [],
+    org_members: [],
   };
 }
 
@@ -257,6 +259,19 @@ export class FakeDB {
           }
           if (q.startsWith("SELECT id FROM teams WHERE id = ? AND org_id = ?")) {
             const r = t.teams.find((x) => x.id === p[0] && x.org_id === p[1]);
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT user_id FROM org_members WHERE org_id = ? AND user_id = ?")) {
+            const r = t.org_members.find((x) => x.org_id === p[0] && x.user_id === p[1]);
+            return ((r ? { user_id: r.user_id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT s.id, s.team_id, s.role, s.frozen_at FROM seats s JOIN teams t")) {
+            const s = t.seats.find((x) => x.id === p[0]);
+            const team = s ? t.teams.find((x) => x.id === s.team_id && x.org_id === p[1]) : null;
+            return ((s && team ? { id: s.id, team_id: s.team_id, role: s.role, frozen_at: s.frozen_at ?? null } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id FROM seats WHERE team_id = ? AND role = ?")) {
+            const r = t.seats.find((x) => x.team_id === p[0] && x.role === p[1]);
             return ((r ? { id: r.id } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT box_max_concurrent FROM orgs WHERE id = ?")) {
@@ -637,6 +652,16 @@ export class FakeDB {
           if (q.startsWith("DELETE FROM seats WHERE id = ?")) {
             t.seats = t.seats.filter((x) => x.id !== p[0]);
             return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE teams SET owner_user_id = ? WHERE id = ?")) {
+            const r = t.teams.find((x) => x.id === p[1]);
+            if (r) r.owner_user_id = p[0];
+            return { meta: { changes: r ? 1 : 0 } };
+          }
+          if (q.startsWith("UPDATE seats SET team_id = ? WHERE id = ?")) {
+            const r = t.seats.find((x) => x.id === p[1]);
+            if (r) r.team_id = p[0];
+            return { meta: { changes: r ? 1 : 0 } };
           }
           if (q.startsWith("DELETE FROM mcp_servers")) {
             const n = t.mcp_servers.length;

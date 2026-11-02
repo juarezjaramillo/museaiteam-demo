@@ -9,7 +9,7 @@ import {
   roleLabel,
   scopeLabel,
 } from "@museaiteam/shared";
-import { api, type GuardrailRow, type McpCatalogEntry, type McpServer, type TeamRow } from "../api.js";
+import { api, type GuardrailRow, type McpCatalogEntry, type McpServer, type MemberRow, type TeamRow } from "../api.js";
 import { GoButton } from "./GoButton.js";
 
 function GuardEditor({
@@ -599,11 +599,13 @@ function ToolsStep({
 function TeamStep({
   org,
   teams,
+  members,
   notify,
   reload,
 }: {
   org: string;
   teams: TeamRow[];
+  members: MemberRow[];
   notify: (m: string) => void;
   reload: () => void;
 }) {
@@ -641,6 +643,23 @@ function TeamStep({
       {teams.map((t) => (
         <div key={t.id}>
           <strong>{t.name}</strong>{" "}
+          <select
+            aria-label={`Who ${t.name} serves`}
+            value={t.ownerUserId ?? ""}
+            onChange={(e) =>
+              api
+                .setTeamOwner(org, t.id, e.target.value === "" ? null : e.target.value)
+                .then(reload)
+                .catch((err) => notify(String(err)))
+            }
+          >
+            <option value="">Founder's bench</option>
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.email ?? "Member"}
+              </option>
+            ))}
+          </select>{" "}
           {t.seats.map((s) => (
             <span key={s.id}>
               <span className={`role role-${s.role}`}>{roleLabel(s.role)}</span>
@@ -839,6 +858,7 @@ export function Setup({ org }: { org: string }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [catalog, setCatalog] = useState<McpCatalogEntry[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [members, setMembers] = useState<MemberRow[]>([]);
   const [note, setNote] = useState("");
 
   async function loadGuards() {
@@ -859,6 +879,7 @@ export function Setup({ org }: { org: string }) {
 
   async function loadTeams() {
     setTeams((await api.getTeams(org)).teams);
+    setMembers((await api.getMembers(org)).members);
   }
 
   function reloadAll() {
@@ -930,7 +951,7 @@ export function Setup({ org }: { org: string }) {
         }
         done={activeSeats > 0}
       >
-        <TeamStep org={org} teams={teams} notify={setNote} reload={loadTeams} />
+        <TeamStep org={org} teams={teams} members={members} notify={setNote} reload={loadTeams} />
       </Step>
 
       <Step

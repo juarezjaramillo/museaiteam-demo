@@ -42,7 +42,12 @@ const FIX = {
   "/api/me": { user: { id: "u1", email: "raul@example.com" }, orgId: "o1" },
   "/api/me/orgs": { orgs: [{ id: "o1", name: "Demo", role: "owner" }] },
   "/api/orgs/o1": { id: "o1", name: "Demo", trial, ideas: { cap: 250000, spent: 1200, left: 248800, graceHours: 72 }, boxMaxConcurrent: 3 },
-  "/api/orgs/o1/teams": { teams: [{ id: "t1", name: "Team", seats: [] }] },
+  "/api/orgs/o1/teams": {
+    teams: [
+      { id: "t1", name: "Support team", ownerUserId: "u2", seats: [{ id: "s1", role: "support", email: "support-a1@hires.museaiteam.com", hired: 1, approved: 1 }] },
+      { id: "t2", name: "Team 2", ownerUserId: null, seats: [{ id: "s2", role: "engineer", email: "engineer-b2@hires.museaiteam.com", hired: 1, approved: 1 }] },
+    ],
+  },
   "/api/orgs/o1/notifications?unread=1": { notifications: [{ id: "n1", kind: "seat.requested", title: "Sam (AI) asked for Linear, GitHub", body: "Needs your approval", link: "/approvals", read: 0, createdAt: "" }] },
   "/api/orgs/o1/team/seats": { seats, meanwhile: ["waiting on the hire's own Linear seat"] },
   "/api/orgs/o1/hires": { hires: [{ role: "engineer", runs: 4, proposals: 6, votes: 9, shipped: 5, up: 3, down: 0, tokens: 120000, tokensEstimated: false }] },
@@ -92,6 +97,7 @@ const FIX = {
     members: [
       { id: "u1", email: "raul@example.com", role: "owner", createdAt: "" },
       { id: "u2", email: "sam@example.com", role: "approver", createdAt: "" },
+      { id: "u3", email: "jo@example.com", role: "viewer", createdAt: "" },
     ],
   },
   "/api/orgs/o1/invites": {

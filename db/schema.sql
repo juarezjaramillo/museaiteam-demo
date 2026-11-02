@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS teams (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id),
   name TEXT NOT NULL,
+  owner_user_id TEXT REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id);
@@ -550,4 +551,14 @@ CREATE TABLE IF NOT EXISTS seat_milestones (
   at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (seat_id, milestone)
 );
+
+CREATE TABLE IF NOT EXISTS team_briefs (
+  team_id TEXT NOT NULL REFERENCES teams(id),
+  day TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  reviewed_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (team_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_team_briefs_day ON team_briefs(day);
 

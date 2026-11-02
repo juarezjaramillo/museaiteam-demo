@@ -26,6 +26,7 @@ export interface SeatRow {
 export interface TeamRow {
   id: string;
   name: string;
+  ownerUserId: string | null;
   seats: SeatRow[];
 }
 
@@ -341,6 +342,16 @@ export const api = {
   approveSeat: (org: string, seatId: string) =>
     req<{ ok: boolean }>(`/api/orgs/${org}/seats/${seatId}/approve`, {
       method: "POST",
+    }),
+  setTeamOwner: (org: string, teamId: string, userId: string | null) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/teams/${teamId}/owner`, {
+      method: "PUT",
+      body: JSON.stringify({ userId }),
+    }),
+  moveSeat: (org: string, seatId: string, teamId: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/seats/${seatId}/team`, {
+      method: "PUT",
+      body: JSON.stringify({ teamId }),
     }),
   getTeamSeats: (org: string) =>
     req<{

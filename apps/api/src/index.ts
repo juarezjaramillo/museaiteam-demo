@@ -147,9 +147,13 @@ import {
 import {
   BadRole,
   DuplicateSeat,
+  SeatFrozen,
+  UnknownMember,
   approveSeat,
   hireSeat,
   listTeams,
+  moveSeat,
+  setTeamOwner,
   teamInOrg,
 } from "./teams.js";
 import { handleSlackEvent, verifySlack, type SlackEvent } from "./slack-in.js";
@@ -1718,6 +1722,51 @@ app.post("/api/orgs/:org/seats/:seatId/approve", async (c) => {
   if (!ok) return c.json({ error: "unknown seat" }, 404);
   return c.json({ ok: true });
 });
+
+app.put(
+  "/api/orgs/:org/teams/:teamId/owner",
+  zValidator("json", z.object({ userId: z.string().nullable() })),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    try {
+      await setTeamOwner(c.env, org, c.req.param("teamId"), c.req.valid("json").userId);
+      return c.json({ ok: true });
+    } catch (err) {
+      if (err instanceof UnknownMember) {
+        return c.json({ error: "unknown member" }, 404);
+      }
+      if (err instanceof BadRole) {
+        return c.json({ error: String(err).slice(0, 160) }, 400);
+      }
+      throw err;
+    }
+  },
+);
+
+app.put(
+  "/api/orgs/:org/seats/:seatId/team",
+  zValidator("json", z.object({ teamId: z.string().min(1) })),
+  async (c) => {
+    const org = await roleOrg(c, ...OWNERS);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    try {
+      await moveSeat(c.env, org, c.req.param("seatId"), c.req.valid("json").teamId);
+      return c.json({ ok: true });
+    } catch (err) {
+      if (err instanceof DuplicateSeat) {
+        return c.json({ error: String(err).slice(0, 160) }, 409);
+      }
+      if (err instanceof SeatFrozen) {
+        return c.json({ error: "hire is offboarded" }, 400);
+      }
+      if (err instanceof BadRole) {
+        return c.json({ error: String(err).slice(0, 160) }, 400);
+      }
+      throw err;
+    }
+  },
+);
 
 app.get("/api/orgs/:org/goals", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);

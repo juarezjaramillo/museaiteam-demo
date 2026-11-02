@@ -14,6 +14,7 @@ import { RunDetailView, Runs } from "./components/Runs.js";
 import { statusLabel } from "@museaiteam/shared";
 import { Setup } from "./components/Setup.js";
 import { Team } from "./components/Team.js";
+import { Teams } from "./components/TeamsView.js";
 import { Wizard } from "./components/Wizard.js";
 
 type Tab =
@@ -22,6 +23,7 @@ type Tab =
   | "runs"
   | "approvals"
   | "hires"
+  | "teams"
   | "lessons"
   | "team"
   | "alerts"
@@ -49,6 +51,7 @@ const NAV: NavEntry[] = [
   { section: "Work", id: "runs", label: "Progress", icon: "M13 2L4.5 13.5H11L10 22l8.5-11.5H12L13 2z" },
   { section: "Work", id: "approvals", label: "Approvals", icon: "M9 12l2 2 4-4M12 3a9 9 0 100 18 9 9 0 000-18z" },
   { section: "Team", id: "hires", label: "Hires", icon: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" },
+  { section: "Team", id: "teams", label: "Teams", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
   { section: "Team", id: "lessons", label: "Lessons", icon: "M4 19.5A2.5 2.5 0 016.5 17H20M4 19.5A2.5 2.5 0 006.5 22H20V2H6.5A2.5 2.5 0 004 4.5v15z" },
   { section: "Team", id: "team", label: "Members", icon: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6" },
   { section: null, id: "alerts", label: "Alerts", icon: "M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0" },
@@ -449,6 +452,7 @@ export function App() {
 
         {tab === "approvals" && <Approvals org={org} onRun={openRun} />}
         {tab === "hires" && <Hires org={org} role={role} />}
+        {tab === "teams" && <Teams org={org} role={role} />}
         {tab === "lessons" && <Lessons org={org} />}
         {tab === "team" && <Team org={org} role={role} />}
         {tab === "alerts" && (
