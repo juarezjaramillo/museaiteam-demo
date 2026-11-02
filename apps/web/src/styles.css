@@ -1346,6 +1346,27 @@ table.guards input.narrow {
   margin: var(--s3) 0;
 }
 
+.proof-img.wide {
+  max-width: 872px;
+}
+
+.proof-imgs {
+  display: flex;
+  gap: var(--s3);
+}
+
+.proof-imgs .proof-img-link {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 420px;
+}
+
+@media (max-width: 880px) {
+  .proof-imgs {
+    flex-direction: column;
+  }
+}
+
 .proof-img .row {
   margin-bottom: var(--s2);
 }

@@ -15,6 +15,7 @@ import {
   targetHref,
   timeLabel,
   type Proof,
+  type ProofBox,
 } from "@museaiteam/shared";
 
 function parseProof(raw: string | null): Proof | null {
@@ -26,12 +27,17 @@ function parseProof(raw: string | null): Proof | null {
   }
 }
 
-function ProofImage({ proof }: { proof: Proof }) {
-  const img = proof.image!;
-  const [showBefore, setShowBefore] = useState(false);
+function FramedImage({
+  src,
+  boxes,
+  showBoxes,
+}: {
+  src: string;
+  boxes: ProofBox[];
+  showBoxes: boolean;
+}) {
   const [size, setSize] = useState<{ w: number; h: number; ratio: string } | null>(null);
   const ref = useRef<HTMLImageElement>(null);
-  const src = showBefore && proof.beforeImage ? proof.beforeImage : img.url;
 
   useEffect(() => {
     const el = ref.current;
@@ -56,39 +62,60 @@ function ProofImage({ proof }: { proof: Proof }) {
   }, [src]);
 
   return (
-    <div className="proof-img">
-      {proof.beforeImage && (
-        <div className="row">
-          <button className="sm" disabled={!showBefore} onClick={() => setShowBefore(false)}>
-            After
-          </button>
-          <button className="sm" disabled={showBefore} onClick={() => setShowBefore(true)}>
-            Before
-          </button>
+    <a className="proof-img-link" href={src} target="_blank" rel="noreferrer">
+      <span
+        className="proof-img-frame"
+        style={size ? { aspectRatio: size.ratio } : undefined}
+      >
+        <img ref={ref} src={src} alt="Image checked by Muse Spark vision" />
+        {showBoxes &&
+          size &&
+          boxes.map((b, i) => {
+            const s = scaleBox(b.box, size.w, size.h);
+            return (
+              <span
+                key={i}
+                className={b.ok ? "proof-box ok" : "proof-box"}
+                style={{ left: s.x, top: s.y, width: s.width, height: s.height }}
+              >
+                <span className="proof-chip">{b.label}</span>
+              </span>
+            );
+          })}
+      </span>
+    </a>
+  );
+}
+
+function ProofImage({ proof }: { proof: Proof }) {
+  const img = proof.image!;
+  const [showBefore, setShowBefore] = useState(false);
+  const src = showBefore && proof.beforeImage ? proof.beforeImage : img.url;
+  const gallery = proof.images && proof.images.length > 1 ? proof.images : null;
+
+  return (
+    <div className={gallery ? "proof-img wide" : "proof-img"}>
+      {gallery ? (
+        <div className="proof-imgs">
+          {gallery.map((g, i) => (
+            <FramedImage key={i} src={g.url} boxes={g.boxes} showBoxes />
+          ))}
         </div>
+      ) : (
+        <>
+          {proof.beforeImage && (
+            <div className="row">
+              <button className="sm" disabled={!showBefore} onClick={() => setShowBefore(false)}>
+                After
+              </button>
+              <button className="sm" disabled={showBefore} onClick={() => setShowBefore(true)}>
+                Before
+              </button>
+            </div>
+          )}
+          <FramedImage src={src} boxes={img.boxes} showBoxes={!showBefore} />
+        </>
       )}
-      <a className="proof-img-link" href={src} target="_blank" rel="noreferrer">
-        <span
-          className="proof-img-frame"
-          style={size ? { aspectRatio: size.ratio } : undefined}
-        >
-          <img ref={ref} src={src} alt="Image checked by Muse Spark vision" />
-          {!showBefore &&
-            size &&
-            img.boxes.map((b, i) => {
-              const s = scaleBox(b.box, size.w, size.h);
-              return (
-                <span
-                  key={i}
-                  className={b.ok ? "proof-box ok" : "proof-box"}
-                  style={{ left: s.x, top: s.y, width: s.width, height: s.height }}
-                >
-                  <span className="proof-chip">{b.label}</span>
-                </span>
-              );
-            })}
-        </span>
-      </a>
       {proof.visionSummary && (
         <p className="dim proof-vision">
           <span className="proof-vision-text">{proof.visionSummary}</span>
