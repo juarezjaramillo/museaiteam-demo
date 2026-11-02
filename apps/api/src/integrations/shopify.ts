@@ -202,20 +202,65 @@ export interface ShopProduct {
   id: string;
   title: string;
   description: string;
+  /** Featured image URL (public CDN), when the product has one. */
+  imageUrl?: string;
+  /** First variant's numeric id, parsed from its gid. */
+  variantId?: number;
+  /** First variant's price. */
+  variantPrice?: number;
 }
+
+export interface ShopProductSummary {
+  id: string;
+  title: string;
+  imageUrl?: string;
+  variantId?: number;
+  variantPrice?: number;
+}
+
+interface ProductNode {
+  id: string;
+  title: string;
+  description?: string;
+  featuredImage?: { url: string } | null;
+  variants?: { nodes: Array<{ id: string; price: string }> };
+}
+
+function photoFields(
+  node: ProductNode,
+): Pick<ShopProduct, "imageUrl" | "variantId" | "variantPrice"> {
+  const out: Pick<ShopProduct, "imageUrl" | "variantId" | "variantPrice"> = {};
+  if (node.featuredImage?.url) out.imageUrl = node.featuredImage.url;
+  const variant = node.variants?.nodes[0];
+  if (variant) {
+    const numeric = Number(variant.id.split("/").pop());
+    if (Number.isFinite(numeric)) out.variantId = numeric;
+    const price = Number(variant.price);
+    if (Number.isFinite(price)) out.variantPrice = price;
+  }
+  return out;
+}
+
+const PRODUCT_PHOTO_FIELDS = `
+  featuredImage { url }
+  variants(first: 1) { nodes { id price } }`;
 
 export async function listProducts(
   shop: string,
   token: string,
-): Promise<Array<{ id: string; title: string }>> {
+): Promise<ShopProductSummary[]> {
   const data = await gql<{
-    products: { nodes: Array<{ id: string; title: string }> };
+    products: { nodes: ProductNode[] };
   }>(
     shop,
     token,
-    `{ products(first: 10) { nodes { id title } } }`,
+    `{ products(first: 10) { nodes { id title ${PRODUCT_PHOTO_FIELDS} } } }`,
   );
-  return data.products.nodes;
+  return data.products.nodes.map((n) => ({
+    id: n.id,
+    title: n.title,
+    ...photoFields(n),
+  }));
 }
 
 export async function getProduct(
@@ -224,14 +269,16 @@ export async function getProduct(
   productId: string,
 ): Promise<ShopProduct | null> {
   const data = await gql<{
-    product?: { id: string; title: string; description: string } | null;
+    product?: (ProductNode & { description: string }) | null;
   }>(
     shop,
     token,
-    `query($id: ID!) { product(id: $id) { id title description } }`,
+    `query($id: ID!) { product(id: $id) { id title description ${PRODUCT_PHOTO_FIELDS} } }`,
     { id: productId },
   );
-  return data.product ?? null;
+  if (!data.product) return null;
+  const p = data.product;
+  return { id: p.id, title: p.title, description: p.description, ...photoFields(p) };
 }
 
 /** Product copy update. Callers read the prior description first (both
