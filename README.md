@@ -17,6 +17,7 @@ Built for the Meta Global AI Developer Hackathon (Startup track, solo).
 - Muse Image (`muse-image-1.0`): the marketer makes campaign images anchored on the store's real product photos.
 - Muse Spark vision: every image and product description is read back and checked against the run's real facts (with bounding boxes) before it ships; wrong ones are fixed with Muse Image edits.
 - Muse Voice Transcribe (`muse-voice-transcribe-1.0`): owners dictate goals and team briefs, streamed live, in English or Spanish; Muse Spark shapes the words into a draft while the original audio is kept.
+- "Cloudflare Browser Rendering + Muse Spark vision: after shipping, the team opens the live store like a customer, applies the new code at checkout, and proves it works with annotated screenshots."
 
 Full decision record: [docs/decisions.md](docs/decisions.md).
 
