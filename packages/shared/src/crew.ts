@@ -58,6 +58,7 @@ const OWNER_FOR_SYSTEM: Record<string, string> = {
   shopify: "marketer",
   hubspot: "analyst",
   notion: "pm",
+  creative: "marketer",
   mcp: "analyst",
 };
 

@@ -143,6 +143,8 @@ const ACTION_WORDS: Record<string, string> = {
   "notion.create_page": "Page",
   "notion.archive_page": "Archive page",
   "notion.run_page": "Log page",
+  "creative.campaign_image": "Campaign image",
+  "creative.delete_image": "Image removed",
   "mcp.tool": "Tool use",
 };
 

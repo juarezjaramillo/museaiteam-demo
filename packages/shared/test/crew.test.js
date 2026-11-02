@@ -34,6 +34,7 @@ test("action kinds map to the seat whose limits authorized them", () => {
   assert.equal(ownerFor("shopify.create_discount"), "marketer");
   assert.equal(ownerFor("hubspot.triage_ticket"), "analyst");
   assert.equal(ownerFor("notion.create_page"), "pm");
+  assert.equal(ownerFor("creative.campaign_image"), "marketer");
   assert.equal(ownerFor("acme.future"), "manager");
 });
 
@@ -51,4 +52,13 @@ test("proof covers finished results, null otherwise", () => {
   assert.equal(ticket.after, "2");
   const unknown = proof("acme.future", "thing", "done");
   assert.ok(unknown.summary.includes("thing"));
+  const images = proof("creative.campaign_image", "Black Friday", "done", {}, {
+    images: ["https://img/1.png", "https://img/2.png"],
+    image: { url: "https://img/2.png", boxes: [{ label: "code", box: [1, 2, 3, 4], ok: true }] },
+    visionSummary: "Checked by Muse Spark",
+  });
+  assert.equal(images.summary, "Made 2 campaign images");
+  assert.equal(images.image.url, "https://img/2.png");
+  assert.equal(images.image.boxes.length, 1);
+  assert.equal(images.visionSummary, "Checked by Muse Spark");
 });

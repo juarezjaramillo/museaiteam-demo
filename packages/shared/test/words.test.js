@@ -32,6 +32,8 @@ test("labels map internal values to customer words", () => {
   assert.equal(scheduleLabel("weekly:1"), "Mondays");
   assert.equal(actionLabel("github.open_pr"), "Pull request");
   assert.equal(actionLabel("hubspot.triage_ticket"), "Ticket sort");
+  assert.equal(actionLabel("creative.campaign_image"), "Campaign image");
+  assert.equal(actionLabel("creative.delete_image"), "Image removed");
   assert.equal(noticeLabel("approval.auto"), "Auto-approved");
 });
 
@@ -82,5 +84,6 @@ test("auto-review safety: every money kind is undoable (so the money block is wh
     assert.equal(hasInverse(kind), true);
   }
   assert.equal(hasInverse("shopify.create_discount"), true);
+  assert.equal(hasInverse("creative.campaign_image"), true);
   assert.equal(hasInverse("acme.future_kind"), false);
 });

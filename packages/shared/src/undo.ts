@@ -22,6 +22,7 @@ export const INVERSE: Record<string, string> = {
   "hubspot.update_ticket": "hubspot.restore_fields",
   "notion.create_page": "notion.archive_page",
   "notion.run_page": "notion.archive_page",
+  "creative.campaign_image": "creative.delete_image",
 };
 
 export function hasInverse(kind: string): boolean {

@@ -6,17 +6,58 @@
  * through without proof.
  */
 
+export interface ProofBox {
+  label: string;
+  box: [number, number, number, number];
+  ok: boolean;
+}
+
 export interface Proof {
   summary: string;
   url?: string;
   before?: string;
   after?: string;
+  image?: {
+    url: string;
+    boxes: ProofBox[];
+  };
+  beforeImage?: string;
+  visionSummary?: string;
 }
 
 function clip(v: unknown, n = 140): string | undefined {
   if (v === null || v === undefined) return undefined;
   const s = String(v);
   return s ? s.slice(0, n) : undefined;
+}
+
+/** Vision read-back passthrough: image URLs keep their full length. */
+function visualFields(payload: Record<string, unknown>): Partial<Proof> {
+  const out: Partial<Proof> = {};
+  const img = payload.image as { url?: unknown; boxes?: unknown } | undefined;
+  if (img && typeof img.url === "string" && img.url) {
+    const boxes = Array.isArray(img.boxes)
+      ? (img.boxes as Array<Record<string, unknown>>).filter(
+          (b) =>
+            typeof b.label === "string" &&
+            Array.isArray(b.box) &&
+            b.box.length === 4 &&
+            b.box.every((n) => typeof n === "number") &&
+            typeof b.ok === "boolean",
+        )
+      : [];
+    out.image = {
+      url: img.url,
+      boxes: boxes as unknown as ProofBox[],
+    };
+  }
+  if (typeof payload.beforeImage === "string" && payload.beforeImage) {
+    out.beforeImage = payload.beforeImage;
+  }
+  if (typeof payload.visionSummary === "string" && payload.visionSummary) {
+    out.visionSummary = payload.visionSummary;
+  }
+  return out;
 }
 
 export function buildProof(
@@ -93,6 +134,20 @@ export function buildProof(
     case "notion.create_page":
     case "notion.run_page":
       return { ...base, summary: `Wrote ${clip(payload.title) ?? "a log page"}` };
+    case "creative.campaign_image": {
+      const images = Array.isArray(payload.images) ? payload.images : [];
+      const count =
+        images.length > 0
+          ? images.length
+          : typeof payload.imageCount === "number" && payload.imageCount > 0
+            ? Math.floor(payload.imageCount)
+            : 1;
+      return {
+        ...base,
+        ...visualFields(payload),
+        summary: `Made ${count} campaign image${count === 1 ? "" : "s"}`,
+      };
+    }
     case "mcp.tool":
       return {
         ...base,

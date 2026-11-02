@@ -20,6 +20,7 @@ export * from "./words.js";
 export * from "./undo.js";
 export * from "./crew.js";
 export * from "./proof.js";
+export * from "./vision.js";
 export * from "./mcp-catalog.js";
 export * from "./triggers.js";
 export * from "./seat-email.js";
