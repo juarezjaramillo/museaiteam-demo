@@ -266,6 +266,10 @@ export class FakeDB {
             const r = t.orgs.find((x) => x.id === p[0]);
             return ((r ? { seat_cutover: r.seat_cutover ?? 0 } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT name FROM orgs WHERE id = ?")) {
+            const r = t.orgs.find((x) => x.id === p[0]);
+            return ((r ? { name: r.name } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT id FROM teams WHERE id = ? AND org_id = ?")) {
             const r = t.teams.find((x) => x.id === p[0] && x.org_id === p[1]);
             return ((r ? { id: r.id } : null) as T) ?? null;
@@ -518,6 +522,22 @@ export class FakeDB {
           }
           if (q.startsWith("SELECT id, name, owner_user_id FROM teams WHERE org_id = ?")) {
             return { results: t.teams.filter((x) => x.org_id === p[0]) as T[] };
+          }
+          if (q.startsWith("SELECT name FROM teams WHERE org_id = ?")) {
+            return { results: t.teams.filter((x) => x.org_id === p[0]).map((x) => ({ name: x.name })) as T[] };
+          }
+          if (q.startsWith("SELECT DISTINCT s.role FROM seats s")) {
+            const out: Row[] = [];
+            for (const s of t.seats) {
+              if (s.approved !== 1) continue;
+              const team = t.teams.find((x) => x.id === s.team_id);
+              if (!team || team.org_id !== p[0]) continue;
+              if (!out.some((o) => o.role === s.role)) out.push({ role: s.role });
+            }
+            return { results: out as T[] };
+          }
+          if (q.startsWith("SELECT * FROM goals WHERE org_id = ?")) {
+            return { results: t.goals.filter((x) => x.org_id === p[0]) as T[] };
           }
           if (q.startsWith("SELECT id, role, email, hired, approved FROM seats WHERE team_id = ?")) {
             return { results: t.seats.filter((x) => x.team_id === p[0]) as T[] };

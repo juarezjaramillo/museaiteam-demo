@@ -55,6 +55,7 @@ import { runBaseline } from "./baseline.js";
 import { BoxOffline, BoxQuota, boxSpend, provider, reconcileBoxes } from "./box.js";
 import { audit, getRun } from "./db.js";
 import { servePublicImage } from "./creative.js";
+import { transcribeUpload } from "./voice.js";
 import { nudgeSeatRequests, teamSeats } from "./enroll.js";
 import { getSeat, listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
 import {
@@ -1817,6 +1818,21 @@ app.put(
     }
   },
 );
+
+app.post("/api/orgs/:org/voice/transcribe", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  if (!(await takeHit(c.env, `voice:${org}`, 30, 3600))) {
+    return c.json({ error: "too many voice notes — try again in an hour" }, 429);
+  }
+  let form: FormData;
+  try {
+    form = await c.req.formData();
+  } catch {
+    return c.json({ error: "expected an audio upload" }, 400);
+  }
+  return transcribeUpload(c.env, org, form.get("audio"), form.get("context"));
+});
 
 app.post("/api/orgs/:org/teams/:teamId/review", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
