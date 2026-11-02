@@ -12,15 +12,18 @@ export interface ProofBox {
   ok: boolean;
 }
 
+export interface ProofImage {
+  url: string;
+  boxes: ProofBox[];
+}
+
 export interface Proof {
   summary: string;
   url?: string;
   before?: string;
   after?: string;
-  image?: {
-    url: string;
-    boxes: ProofBox[];
-  };
+  image?: ProofImage;
+  images?: ProofImage[];
   beforeImage?: string;
   visionSummary?: string;
 }
@@ -31,25 +34,32 @@ function clip(v: unknown, n = 140): string | undefined {
   return s ? s.slice(0, n) : undefined;
 }
 
+function validImage(v: unknown): ProofImage | undefined {
+  const img = v as { url?: unknown; boxes?: unknown } | null | undefined;
+  if (!img || typeof img.url !== "string" || !img.url) return undefined;
+  const boxes = Array.isArray(img.boxes)
+    ? (img.boxes as Array<Record<string, unknown>>).filter(
+        (b) =>
+          typeof b.label === "string" &&
+          Array.isArray(b.box) &&
+          b.box.length === 4 &&
+          b.box.every((n) => typeof n === "number") &&
+          typeof b.ok === "boolean",
+      )
+    : [];
+  return { url: img.url, boxes: boxes as unknown as ProofBox[] };
+}
+
 /** Vision read-back passthrough: image URLs keep their full length. */
 function visualFields(payload: Record<string, unknown>): Partial<Proof> {
   const out: Partial<Proof> = {};
-  const img = payload.image as { url?: unknown; boxes?: unknown } | undefined;
-  if (img && typeof img.url === "string" && img.url) {
-    const boxes = Array.isArray(img.boxes)
-      ? (img.boxes as Array<Record<string, unknown>>).filter(
-          (b) =>
-            typeof b.label === "string" &&
-            Array.isArray(b.box) &&
-            b.box.length === 4 &&
-            b.box.every((n) => typeof n === "number") &&
-            typeof b.ok === "boolean",
-        )
-      : [];
-    out.image = {
-      url: img.url,
-      boxes: boxes as unknown as ProofBox[],
-    };
+  const single = validImage(payload.image);
+  if (single) out.image = single;
+  if (Array.isArray(payload.images)) {
+    const rest = payload.images
+      .map(validImage)
+      .filter((x): x is ProofImage => !!x);
+    if (rest.length > 0) out.images = rest;
   }
   if (typeof payload.beforeImage === "string" && payload.beforeImage) {
     out.beforeImage = payload.beforeImage;
@@ -76,6 +86,13 @@ export function buildProof(
       payload.failReason
     ) {
       return { summary: payload.failReason.slice(0, 280) };
+    }
+    if (
+      status === "skipped" &&
+      typeof payload.skipReason === "string" &&
+      payload.skipReason
+    ) {
+      return { summary: payload.skipReason.slice(0, 280) };
     }
     return null;
   }
@@ -125,6 +142,19 @@ export function buildProof(
         before: clip(rp.priorDescription),
         after: clip(payload.description),
       };
+    case "shopify.storefront_check": {
+      const parts: string[] = [];
+      const co = payload.checkout as { code?: unknown; percent?: unknown } | undefined;
+      if (co && typeof co.code === "string" && typeof co.percent === "number") {
+        parts.push(`${co.code} takes ${co.percent}% off at checkout ✓`);
+      }
+      if (payload.copyLive === true) parts.push("new copy live ✓");
+      return {
+        ...base,
+        ...visualFields(payload),
+        summary: `Checked the live store: ${parts.join(" · ") || "nothing to verify"}`,
+      };
+    }
     case "hubspot.create_note":
     case "hubspot.followup_note":
       return { ...base, summary: `Left a note on ticket ${clip(payload.ticketId) ?? target}` };

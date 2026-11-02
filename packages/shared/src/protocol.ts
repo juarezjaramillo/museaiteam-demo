@@ -73,6 +73,7 @@ export const ActionKind = z.enum([
   "shopify.targeted_discount",
   "shopify.product_copy",
   "shopify.restore_product",
+  "shopify.storefront_check",
   "hubspot.create_note",
   "hubspot.delete_note",
   "hubspot.triage_ticket",

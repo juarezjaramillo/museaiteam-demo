@@ -212,6 +212,8 @@ export interface ShopProduct {
   id: string;
   title: string;
   description: string;
+  /** URL handle for the storefront product page. */
+  handle?: string;
   /** Featured image URL (public CDN), when the product has one. */
   imageUrl?: string;
   /** First variant's numeric id, parsed from its gid. */
@@ -279,16 +281,22 @@ export async function getProduct(
   productId: string,
 ): Promise<ShopProduct | null> {
   const data = await gql<{
-    product?: (ProductNode & { description: string }) | null;
+    product?: (ProductNode & { description: string; handle: string }) | null;
   }>(
     shop,
     token,
-    `query($id: ID!) { product(id: $id) { id title description ${PRODUCT_PHOTO_FIELDS} } }`,
+    `query($id: ID!) { product(id: $id) { id title description handle ${PRODUCT_PHOTO_FIELDS} } }`,
     { id: productId },
   );
   if (!data.product) return null;
   const p = data.product;
-  return { id: p.id, title: p.title, description: p.description, ...photoFields(p) };
+  return {
+    id: p.id,
+    title: p.title,
+    description: p.description,
+    handle: p.handle,
+    ...photoFields(p),
+  };
 }
 
 /** Product copy update. Callers read the prior description first (both

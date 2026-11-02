@@ -73,4 +73,28 @@ test("proof covers finished results, null otherwise", () => {
     failReason: "Copy said X but the bag says Y; not published.",
   });
   assert.equal(honestFail.summary, "Copy said X but the bag says Y; not published.");
+  const store = proof("shopify.storefront_check", "BREW20", "done", undefined, {
+    checkout: { code: "BREW20", percent: 20 },
+    copyLive: true,
+    image: { url: "https://img/c.png", boxes: [] },
+    images: [
+      { url: "https://img/c.png", boxes: [] },
+      { url: "https://img/p.png", boxes: [{ label: "New copy", box: [1, 2, 3, 4], ok: true }] },
+    ],
+  });
+  assert.equal(
+    store.summary,
+    "Checked the live store: BREW20 takes 20% off at checkout ✓ · new copy live ✓"
+  );
+  assert.equal(store.image.url, "https://img/c.png");
+  assert.equal(store.images.length, 2);
+  assert.equal(store.images[1].boxes[0].label, "New copy");
+  const needPw = proof("shopify.storefront_check", "live store", "skipped", undefined, {
+    skipReason: "Add your store password in Setup so the team can check the live store.",
+  });
+  assert.equal(
+    needPw.summary,
+    "Add your store password in Setup so the team can check the live store."
+  );
+  assert.equal(proof("shopify.storefront_check", "t", "skipped", undefined, {}), null);
 });

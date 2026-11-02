@@ -34,6 +34,7 @@ test("labels map internal values to customer words", () => {
   assert.equal(actionLabel("hubspot.triage_ticket"), "Ticket sort");
   assert.equal(actionLabel("creative.campaign_image"), "Campaign image");
   assert.equal(actionLabel("creative.delete_image"), "Image removed");
+  assert.equal(actionLabel("shopify.storefront_check"), "Checked the live store");
   assert.equal(noticeLabel("approval.auto"), "Auto-approved");
 });
 

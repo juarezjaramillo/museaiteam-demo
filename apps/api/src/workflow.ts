@@ -97,6 +97,7 @@ import { addFeedback } from "./feedback.js";
 import { executeRevert } from "./revert.js";
 import { executeCreativeAct } from "./creative.js";
 import { executeProductCopyAct } from "./product-copy.js";
+import { executeStorefrontCheckAct } from "./storefront.js";
 import { chargeIdea } from "./allowance.js";
 import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
 import { hireToken, markSeatLost, seatForRole, seatReadyForServer, seatToolIds } from "./seat-creds.js";
@@ -1061,6 +1062,18 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       hooks: {
         recordAction: (kind, target, status, revertPayload, payload) =>
           this.recordAction(runId, kind, target, status, revertPayload, payload ?? {}),
+        addTokens: (n) => this.addTokens(runId, n),
+      },
+    });
+    if (done.has("shopify.storefront_check")) return;
+    await executeStorefrontCheckAct(this.env, {
+      orgId,
+      runId,
+      shop,
+      token,
+      hooks: {
+        recordAction: (kind, target, status, revertPayload, payload, actionId) =>
+          this.recordAction(runId, kind, target, status, revertPayload, payload ?? {}, actionId),
         addTokens: (n) => this.addTokens(runId, n),
       },
     });

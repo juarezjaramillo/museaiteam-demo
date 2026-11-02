@@ -342,6 +342,13 @@ export class FakeDB {
             const last = rows[rows.length - 1];
             return ((last ? { target: last.target, payload: last.payload } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT payload, revert_payload FROM actions WHERE run_id = ?")) {
+            const rows = t.actions.filter(
+              (a) => a.run_id === p[0] && a.kind === "shopify.product_copy" && a.status === "done",
+            );
+            const last = rows[rows.length - 1];
+            return ((last ? { payload: last.payload, revert_payload: last.revert_payload ?? null } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT revert_payload FROM actions WHERE run_id = ?")) {
             const rows = t.actions.filter(
               (a) =>

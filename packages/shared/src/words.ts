@@ -133,6 +133,7 @@ const ACTION_WORDS: Record<string, string> = {
   "shopify.targeted_discount": "Targeted discount",
   "shopify.product_copy": "Product words",
   "shopify.restore_product": "Restore product",
+  "shopify.storefront_check": "Checked the live store",
   "hubspot.create_note": "Note",
   "hubspot.delete_note": "Remove note",
   "hubspot.triage_ticket": "Ticket sort",

@@ -20,6 +20,7 @@ import {
 import { listProducts, shopName } from "./integrations/shopify.js";
 import { findChannelId, postMessage } from "./integrations/slack.js";
 import { appendImageBlocks } from "./integrations/notion.js";
+import { publishPublicImage } from "./artifacts.js";
 
 export interface CreativeHooks {
   recordAction(
@@ -39,15 +40,6 @@ const FORMAT_SHOT: Record<CampaignFormat, { size: ImageSize; shot: string }> = {
 };
 
 const MAX_FIXES = 2;
-
-/** 32 url-safe random chars from 24 random bytes (no padding). */
-function newToken(): string {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
 
 function pngToDataUrl(png: Uint8Array): string {
   let bin = "";
@@ -395,14 +387,9 @@ export async function executeCreativeAct(
 
     const publishedTokens: string[] = [];
     const publish = async (r2key: string): Promise<string> => {
-      const token = newToken();
-      await env.DB.prepare(
-        "INSERT INTO public_images (token, r2_key, org_id, action_id) VALUES (?, ?, ?, ?)",
-      )
-        .bind(token, r2key, orgId, actionId)
-        .run();
+      const { token, url } = await publishPublicImage(env, { orgId, actionId, r2key });
       publishedTokens.push(token);
-      return `${env.APP_URL}/a/${token}`;
+      return url;
     };
     const urls: string[] = [];
     for (const w of worked) {
