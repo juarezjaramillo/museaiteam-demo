@@ -1414,3 +1414,59 @@ table.guards input.narrow {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---------- Voice input ---------- */
+
+.voice-mic {
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.voice-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--bad);
+}
+
+.voice-meter {
+  flex: 1;
+  max-width: 160px;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.voice-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-meter-fill {
+    transition: none;
+  }
+}
+
+.voice-live {
+  margin: var(--s2) 0 0;
+}
+
+.voice-partial {
+  color: var(--faint);
+}
+
+.voice-caption {
+  margin: var(--s1) 0 0;
+  font-size: 0.8rem;
+}
+
+.voice-error {
+  color: var(--bad);
+  margin: var(--s2) 0 0;
+}
