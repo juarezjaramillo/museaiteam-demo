@@ -120,6 +120,7 @@ export function buildProof(
     case "shopify.product_copy":
       return {
         ...base,
+        ...visualFields(payload),
         summary: "Rewrote the product description",
         before: clip(rp.priorDescription),
         after: clip(payload.description),

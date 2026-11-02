@@ -50,8 +50,6 @@ import {
 } from "./integrations/slack.js";
 import {
   createTargetedDiscount,
-  getProduct,
-  updateProductDescription,
 } from "./integrations/shopify.js";
 import {
   associateNoteToTicket,
@@ -89,7 +87,6 @@ import {
   runPeerReview,
   runPmSplit,
   runTiebreak,
-  runProductCopy,
   runProposals,
   runSupportTriage,
   runVotes,
@@ -99,6 +96,7 @@ import { addEvent, goalTimeline, recordRunSummary } from "./goals.js";
 import { addFeedback } from "./feedback.js";
 import { executeRevert } from "./revert.js";
 import { executeCreativeAct } from "./creative.js";
+import { executeProductCopyAct } from "./product-copy.js";
 import { chargeIdea } from "./allowance.js";
 import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
 import { hireToken, markSeatLost, seatForRole, seatReadyForServer, seatToolIds } from "./seat-creds.js";
@@ -1003,7 +1001,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       });
       return;
     }
-    const { shop, product_id: productId } = await getProviderConfig(this.env, orgId, "shopify");
+    const { shop } = await getProviderConfig(this.env, orgId, "shopify");
     if (typeof shop !== "string" || !shop) {
       await this.recordAction(runId, "shopify.targeted_discount", "discount", "skipped", undefined, {
         reason: "shop not configured",
@@ -1054,46 +1052,18 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       }
     }
     if (done.has("shopify.product_copy")) return;
-    const productGuard = await checkGuard(this.env, orgId, "marketer", "shopify", "product");
-    if (!productGuard.allowed) {
-      await this.recordAction(runId, "shopify.product_copy", "product", "skipped", undefined, {
-        reason: productGuard.reason,
-      });
-      return;
-    }
-    if (typeof productId !== "string" || !productId) {
-      await this.recordAction(runId, "shopify.product_copy", "product", "skipped", undefined, {
-        reason: "no showcase product picked (save one in Setup)",
-      });
-      await audit(this.env, runId, "marketer", "action.skipped", {
-        system: "shopify",
-        reason: "showcase product not configured",
-      });
-      return;
-    }
-    try {
-      const product = await getProduct(shop, token, productId);
-      if (!product) {
-        await this.recordAction(runId, "shopify.product_copy", "product", "skipped", undefined, {
-          reason: "showcase product not found",
-        });
-        return;
-      }
-      const copy = await runProductCopy(this.env, decision, product.title, product.description);
-      await this.addTokens(runId, copy.tokens);
-      await updateProductDescription(shop, token, product.id, copy.description);
-      await this.recordAction(runId, "shopify.product_copy", product.title, "done", {
-        shop,
-        productId: product.id,
-        priorDescription: product.description,
-      });
-    } catch (err) {
-      await this.recordAction(runId, "shopify.product_copy", "product", "failed");
-      await audit(this.env, runId, "marketer", "action.failed", {
-        system: "shopify",
-        error: String(err).slice(0, 600),
-      });
-    }
+    await executeProductCopyAct(this.env, {
+      orgId,
+      runId,
+      decision,
+      shop,
+      token,
+      hooks: {
+        recordAction: (kind, target, status, revertPayload, payload) =>
+          this.recordAction(runId, kind, target, status, revertPayload, payload ?? {}),
+        addTokens: (n) => this.addTokens(runId, n),
+      },
+    });
   }
 
   /** Maya's image studio, after the discount and Notion acts it builds on. */

@@ -805,6 +805,7 @@ export async function runProductCopy(
   decision: string,
   title: string,
   current: string,
+  photoNote?: string,
 ): Promise<{ description: string; tokens: number }> {
   const client = new SparkClient(env);
   const res = await client.chat(ProductCopy, {
@@ -814,6 +815,7 @@ export async function runProductCopy(
       `Decision: ${decision}`,
       `Product: ${title}`,
       `Current description: ${current || "(empty)"}`,
+      ...(photoNote ? [`Photo check: ${photoNote}`] : []),
       "",
       "Rewrite the description. Keep every true fact; cut fluff.",
       'Reply JSON: {"description": "..."}.',

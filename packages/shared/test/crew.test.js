@@ -61,4 +61,16 @@ test("proof covers finished results, null otherwise", () => {
   assert.equal(images.image.url, "https://img/2.png");
   assert.equal(images.image.boxes.length, 1);
   assert.equal(images.visionSummary, "Checked by Muse Spark");
+  const copy = proof("shopify.product_copy", "Oaxaca Pluma", "done", { priorDescription: "old" }, {
+    description: "new",
+    image: { url: "https://img/p.png", boxes: [] },
+    visionSummary: "Checked against the product photo: roast LIGHT ✓",
+  });
+  assert.equal(copy.after, "new");
+  assert.equal(copy.image.url, "https://img/p.png");
+  assert.ok(copy.visionSummary.includes("product photo"));
+  const honestFail = proof("shopify.product_copy", "t", "failed", undefined, {
+    failReason: "Copy said X but the bag says Y; not published.",
+  });
+  assert.equal(honestFail.summary, "Copy said X but the bag says Y; not published.");
 });
