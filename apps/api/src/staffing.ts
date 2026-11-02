@@ -19,7 +19,7 @@ import { publishEvent } from "./events.js";
 import { notify } from "./notify.js";
 import { runSquadPick } from "./agents.js";
 import { addEvent, getGoal, recordRunSummary } from "./goals.js";
-import { approvedRoles, ensureTeam, teamInOrg } from "./teams.js";
+import { approvedRoles, ensureTeam, teamInOrg, todayBriefText } from "./teams.js";
 
 export class RunConflict extends Error {
   constructor(
@@ -198,6 +198,11 @@ export async function createWorkRun(
   }
   const queued = !(await squadFree(env, input.orgId, squad));
   const runId = crypto.randomUUID();
+  // The morning brief rides along: an explicit note wins, otherwise
+  // today's team brief becomes the session's context. Empty briefs
+  // feed nothing, so unbriefed teams behave exactly as before.
+  const briefNote =
+    input.briefNote ?? (await todayBriefText(env, input.orgId, teamId));
   await env.DB.prepare(
     `INSERT INTO runs (id, org_id, team_id, goal_id, kind, parent_run_id, goal,
       metric_name, metric_baseline, metric_target, timebox_days,
@@ -219,7 +224,7 @@ export async function createWorkRun(
       input.voteWindowMs ?? VOTE_TIMEOUT_MS,
       JSON.stringify(squad),
       queued ? "queued" : "open",
-      input.briefNote ?? "",
+      briefNote,
     )
     .run();
   await audit(env, runId, "human", "run.created", {

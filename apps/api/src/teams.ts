@@ -16,10 +16,13 @@ export interface Seat {
   approved: number;
 }
 
+export type ReviewState = "reviewed" | "waiting" | "never";
+
 export interface Team {
   id: string;
   name: string;
   ownerUserId: string | null;
+  review: ReviewState;
   seats: Seat[];
 }
 
@@ -36,7 +39,13 @@ export async function listTeams(env: Env, orgId: string): Promise<Team[]> {
     )
       .bind(t.id)
       .all<Seat>();
-    out.push({ id: t.id, name: t.name, ownerUserId: t.owner_user_id ?? null, seats: seats.results ?? [] });
+    out.push({
+      id: t.id,
+      name: t.name,
+      ownerUserId: t.owner_user_id ?? null,
+      review: await teamReviewState(env, t.id),
+      seats: seats.results ?? [],
+    });
   }
   return out;
 }
@@ -263,6 +272,187 @@ export async function approveSeat(
     }
   }
   return true;
+}
+
+/** Brief/review days are UTC calendar days: one brief per team per day. */
+export function todayDay(now = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+export interface TeamBrief {
+  text: string;
+  reviewedAt: string | null;
+}
+
+async function briefRow(
+  env: Env,
+  teamId: string,
+  day: string,
+): Promise<TeamBrief> {
+  const row = await env.DB.prepare(
+    "SELECT text, reviewed_at FROM team_briefs WHERE team_id = ? AND day = ?",
+  )
+    .bind(teamId, day)
+    .first<{ text: string; reviewed_at: string | null }>();
+  return { text: row?.text ?? "", reviewedAt: row?.reviewed_at ?? null };
+}
+
+/** Today's brief text, or "" when the team wrote nothing: safe to feed sessions. */
+export async function todayBriefText(
+  env: Env,
+  orgId: string,
+  teamId: string,
+): Promise<string> {
+  if (!(await teamInOrg(env, orgId, teamId))) return "";
+  return (await briefRow(env, teamId, todayDay())).text;
+}
+
+export async function getBrief(
+  env: Env,
+  orgId: string,
+  teamId: string,
+  day = todayDay(),
+): Promise<TeamBrief> {
+  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  return briefRow(env, teamId, day);
+}
+
+/** Upsert today's brief. One row per team per day exists by construction. */
+export async function putBrief(
+  env: Env,
+  orgId: string,
+  teamId: string,
+  text: string,
+  day = todayDay(),
+): Promise<void> {
+  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  await env.DB.prepare(
+    `INSERT INTO team_briefs (team_id, day, text, updated_at)
+     VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(team_id, day) DO UPDATE SET text = excluded.text, updated_at = datetime('now')`,
+  )
+    .bind(teamId, day, text)
+    .run();
+  await audit(env, null, "human", "team.brief", { org: orgId, team: teamId, day });
+}
+
+/** Mark the day reviewed. Reviewing an unbriefed day still counts: the ritual is the review. */
+export async function markReviewed(
+  env: Env,
+  orgId: string,
+  teamId: string,
+  day = todayDay(),
+): Promise<void> {
+  if (!(await teamInOrg(env, orgId, teamId))) throw new BadRole("unknown team");
+  await env.DB.prepare(
+    `INSERT INTO team_briefs (team_id, day, text, reviewed_at, updated_at)
+     VALUES (?, ?, '', datetime('now'), datetime('now'))
+     ON CONFLICT(team_id, day) DO UPDATE SET reviewed_at = datetime('now'), updated_at = datetime('now')`,
+  )
+    .bind(teamId, day)
+    .run();
+  await audit(env, null, "human", "team.reviewed", { org: orgId, team: teamId, day });
+}
+
+async function lastReviewedAt(env: Env, teamId: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT reviewed_at FROM team_briefs WHERE team_id = ? AND reviewed_at IS NOT NULL ORDER BY reviewed_at DESC LIMIT 1",
+  )
+    .bind(teamId)
+    .first<{ reviewed_at: string }>();
+  return row?.reviewed_at ?? null;
+}
+
+/**
+ * reviewed: today is done. waiting: the team did something (or wrote
+ * something) the reviewer hasn't signed off. never: nothing ever
+ * happened — no rows, no runs, nothing to review.
+ */
+export async function teamReviewState(
+  env: Env,
+  teamId: string,
+  day = todayDay(),
+): Promise<ReviewState> {
+  if ((await briefRow(env, teamId, day)).reviewedAt) return "reviewed";
+  const briefs = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM team_briefs WHERE team_id = ?",
+  )
+    .bind(teamId)
+    .first<{ n: number }>();
+  if ((briefs?.n ?? 0) > 0) return "waiting";
+  const run = await env.DB.prepare(
+    "SELECT id FROM runs WHERE team_id = ? LIMIT 1",
+  )
+    .bind(teamId)
+    .first<{ id: string }>();
+  return run ? "waiting" : "never";
+}
+
+export interface OvernightRun {
+  id: string;
+  goal: string;
+  status: string;
+  kind: string;
+  createdAt: string;
+}
+
+export interface PendingTeamAction {
+  id: string;
+  runId: string;
+  kind: string;
+  target: string;
+  runGoal: string;
+}
+
+export interface ReviewPayload {
+  team: { id: string; name: string; ownerUserId: string | null };
+  day: string;
+  brief: TeamBrief;
+  overnight: OvernightRun[];
+  pending: PendingTeamAction[];
+}
+
+/**
+ * One screen per team per day: what the team did since the last
+ * review, what waits for approval, today's brief. The empty cutoff
+ * matches every run, so "never reviewed" needs no special case.
+ */
+export async function reviewPayload(
+  env: Env,
+  orgId: string,
+  teamId: string,
+): Promise<ReviewPayload> {
+  const team = await env.DB.prepare(
+    "SELECT id, name, owner_user_id FROM teams WHERE id = ? AND org_id = ?",
+  )
+    .bind(teamId, orgId)
+    .first<{ id: string; name: string; owner_user_id: string | null }>();
+  if (!team) throw new BadRole("unknown team");
+  const day = todayDay();
+  const last = (await lastReviewedAt(env, teamId)) ?? "";
+  const runs = await env.DB.prepare(
+    "SELECT id, goal, status, kind, created_at FROM runs WHERE team_id = ? AND created_at > ? ORDER BY created_at DESC LIMIT 20",
+  )
+    .bind(teamId, last)
+    .all<{ id: string; goal: string; status: string; kind: string; created_at: string }>();
+  const acts = await env.DB.prepare(
+    `SELECT a.id, a.run_id, a.kind, a.target, r.goal FROM actions a
+     JOIN runs r ON r.id = a.run_id
+     WHERE r.team_id = ? AND a.status = 'pending' ORDER BY a.created_at LIMIT 50`,
+  )
+    .bind(teamId)
+    .all<{ id: string; run_id: string; kind: string; target: string; goal: string }>();
+  return {
+    team: { id: team.id, name: team.name, ownerUserId: team.owner_user_id ?? null },
+    day,
+    brief: await briefRow(env, teamId, day),
+    overnight: (runs.results ?? []).map((r) => ({
+      id: r.id, goal: r.goal, status: r.status, kind: r.kind, createdAt: r.created_at,
+    })),
+    pending: (acts.results ?? []).map((a) => ({
+      id: a.id, runId: a.run_id, kind: a.kind, target: a.target, runGoal: a.goal,
+    })),
+  };
 }
 
 /** Approved seat roles across the org: the only roles that may debate. */

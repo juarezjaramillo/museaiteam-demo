@@ -150,9 +150,13 @@ import {
   SeatFrozen,
   UnknownMember,
   approveSeat,
+  getBrief,
   hireSeat,
   listTeams,
+  markReviewed,
   moveSeat,
+  putBrief,
+  reviewPayload,
   setTeamOwner,
   teamInOrg,
 } from "./teams.js";
@@ -1767,6 +1771,45 @@ app.put(
     }
   },
 );
+
+app.get("/api/orgs/:org/teams/:teamId/review", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  try {
+    return c.json(await reviewPayload(c.env, org, c.req.param("teamId")));
+  } catch (err) {
+    if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);
+    throw err;
+  }
+});
+
+app.put(
+  "/api/orgs/:org/teams/:teamId/brief",
+  zValidator("json", z.object({ text: z.string().max(4000) })),
+  async (c) => {
+    const org = await roleOrg(c, ...EVERYONE);
+    if (!org) return c.json({ error: "forbidden" }, 403);
+    try {
+      await putBrief(c.env, org, c.req.param("teamId"), c.req.valid("json").text);
+      return c.json(await getBrief(c.env, org, c.req.param("teamId")));
+    } catch (err) {
+      if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);
+      throw err;
+    }
+  },
+);
+
+app.post("/api/orgs/:org/teams/:teamId/review", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  try {
+    await markReviewed(c.env, org, c.req.param("teamId"));
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);
+    throw err;
+  }
+});
 
 app.get("/api/orgs/:org/goals", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);

@@ -33,6 +33,7 @@ export interface FakeTables {
   box_runs: Row[];
   seat_milestones: Row[];
   org_members: Row[];
+  team_briefs: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -63,6 +64,7 @@ export function blankTables(): FakeTables {
     box_runs: [],
     seat_milestones: [],
     org_members: [],
+    team_briefs: [],
   };
 }
 
@@ -261,6 +263,27 @@ export class FakeDB {
             const r = t.teams.find((x) => x.id === p[0] && x.org_id === p[1]);
             return ((r ? { id: r.id } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT id, name, owner_user_id FROM teams WHERE id = ? AND org_id = ?")) {
+            const r = t.teams.find((x) => x.id === p[0] && x.org_id === p[1]);
+            return ((r ? { id: r.id, name: r.name, owner_user_id: r.owner_user_id ?? null } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT text, reviewed_at FROM team_briefs WHERE team_id = ? AND day = ?")) {
+            const r = t.team_briefs.find((x) => x.team_id === p[0] && x.day === p[1]);
+            return ((r ? { text: r.text, reviewed_at: r.reviewed_at ?? null } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT reviewed_at FROM team_briefs WHERE team_id = ? AND reviewed_at IS NOT NULL")) {
+            const rows = t.team_briefs
+              .filter((x) => x.team_id === p[0] && x.reviewed_at != null)
+              .sort((a, b) => String(a.reviewed_at) < String(b.reviewed_at) ? 1 : -1);
+            return ((rows[0] ? { reviewed_at: rows[0].reviewed_at } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT COUNT(*) AS n FROM team_briefs WHERE team_id = ?")) {
+            return ({ n: t.team_briefs.filter((x) => x.team_id === p[0]).length } as T) ?? null;
+          }
+          if (q.startsWith("SELECT id FROM runs WHERE team_id = ? LIMIT 1")) {
+            const r = t.runs.find((x) => x.team_id === p[0]);
+            return ((r ? { id: r.id } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT user_id FROM org_members WHERE org_id = ? AND user_id = ?")) {
             const r = t.org_members.find((x) => x.org_id === p[0] && x.user_id === p[1]);
             return ((r ? { user_id: r.user_id } : null) as T) ?? null;
@@ -451,6 +474,30 @@ export class FakeDB {
           }
           if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ?")) {
             return { results: t.mcp_servers.filter((r) => r.org_id === p[0]) as T[] };
+          }
+          if (q.startsWith("SELECT id, name, owner_user_id FROM teams WHERE org_id = ?")) {
+            return { results: t.teams.filter((x) => x.org_id === p[0]) as T[] };
+          }
+          if (q.startsWith("SELECT id, role, email, hired, approved FROM seats WHERE team_id = ?")) {
+            return { results: t.seats.filter((x) => x.team_id === p[0]) as T[] };
+          }
+          if (q.startsWith("SELECT id, goal, status, kind, created_at FROM runs WHERE team_id = ?")) {
+            return {
+              results: t.runs
+                .filter((r) => r.team_id === p[0] && String(r.created_at ?? "") > String(p[1]))
+                .sort((a, b) => (String(a.created_at) < String(b.created_at) ? 1 : -1))
+                .slice(0, 20) as T[],
+            };
+          }
+          if (q.startsWith("SELECT a.id, a.run_id, a.kind, a.target, r.goal FROM actions a JOIN runs r")) {
+            const out: Row[] = [];
+            for (const a of t.actions) {
+              if (a.status !== "pending") continue;
+              const run = t.runs.find((x) => x.id === a.run_id);
+              if (!run || run.team_id !== p[0]) continue;
+              out.push({ id: a.id, run_id: a.run_id, kind: a.kind, target: a.target, goal: run.goal });
+            }
+            return { results: out.slice(0, 50) as T[] };
           }
           if (q.includes("FROM actions") && q.includes("run_id = ?")) {
             if (q.includes("NOT IN")) {
@@ -924,6 +971,21 @@ export class FakeDB {
             const r = t.seat_mail.find((x) => x.id === p[0] && x.seat_id === p[1] && !x.read_at);
             if (r) r.read_at = "now";
             return { meta: { changes: r ? 1 : 0 } };
+          }
+          if (q.startsWith("INSERT INTO team_briefs (team_id, day, text, updated_at)")) {
+            const [team_id, day, text] = p as string[];
+            const row = t.team_briefs.find((x) => x.team_id === team_id && x.day === day);
+            if (row) row.text = text;
+            else t.team_briefs.push({ team_id, day, text, reviewed_at: null });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO team_briefs (team_id, day, text, reviewed_at, updated_at)")) {
+            const [team_id, day] = p as string[];
+            const now = new Date().toISOString();
+            const row = t.team_briefs.find((x) => x.team_id === team_id && x.day === day);
+            if (row) row.reviewed_at = now;
+            else t.team_briefs.push({ team_id, day, text: "", reviewed_at: now });
+            return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO proposals_out (id, org_id, kind, goal_id, title, body, status, remind_at, start_at)")) {
             t.proposals_out.push({

@@ -44,8 +44,19 @@ const FIX = {
   "/api/orgs/o1": { id: "o1", name: "Demo", trial, ideas: { cap: 250000, spent: 1200, left: 248800, graceHours: 72 }, boxMaxConcurrent: 3 },
   "/api/orgs/o1/teams": {
     teams: [
-      { id: "t1", name: "Support team", ownerUserId: "u2", seats: [{ id: "s1", role: "support", email: "support-a1@hires.museaiteam.com", hired: 1, approved: 1 }] },
-      { id: "t2", name: "Team 2", ownerUserId: null, seats: [{ id: "s2", role: "engineer", email: "engineer-b2@hires.museaiteam.com", hired: 1, approved: 1 }] },
+      { id: "t1", name: "Support team", ownerUserId: "u2", review: "waiting", seats: [{ id: "s1", role: "support", email: "support-a1@hires.museaiteam.com", hired: 1, approved: 1 }] },
+      { id: "t2", name: "Team 2", ownerUserId: null, review: "never", seats: [{ id: "s2", role: "engineer", email: "engineer-b2@hires.museaiteam.com", hired: 1, approved: 1 }] },
+    ],
+  },
+  "/api/orgs/o1/teams/t1/review": {
+    team: { id: "t1", name: "Support team", ownerUserId: "u2" },
+    day: "2026-10-29",
+    brief: { text: "Today matters: the Acme tickets and the refund queue.", reviewedAt: null },
+    overnight: [
+      { id: "run1", goal: "Answer the overnight ticket queue", status: "done", kind: "work", createdAt: "2026-10-29T04:05:00Z" },
+    ],
+    pending: [
+      { id: "a9", runId: "run1", kind: "hubspot.update_ticket", target: "Ticket #4821", runGoal: "Answer the overnight ticket queue" },
     ],
   },
   "/api/orgs/o1/notifications?unread=1": { notifications: [{ id: "n1", kind: "seat.requested", title: "Sam (AI) asked for Linear, GitHub", body: "Needs your approval", link: "/approvals", read: 0, createdAt: "" }] },
@@ -254,6 +265,18 @@ if (tab === "setup") {
   }
 }
 await page.screenshot({ path: `/tmp/shots/${tab}.png`, fullPage: tab === "setup" || tab === "approvals" });
+if (tab === "teams") {
+  const btns = await page.$$("button");
+  for (const b of btns) {
+    const t = await b.evaluate((el) => el.textContent);
+    if (t?.trim() === "Review") {
+      await b.click();
+      await new Promise((r) => setTimeout(r, 800));
+      break;
+    }
+  }
+  await page.screenshot({ path: "/tmp/shots/teams-review.png" });
+}
 // Fixtures always describe a signed-in founder: a Sign in link means the
 // mocks silently stopped applying and the shot would prove nothing.
 const signedOut = await page.evaluate(() =>

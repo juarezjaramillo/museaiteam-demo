@@ -27,7 +27,16 @@ export interface TeamRow {
   id: string;
   name: string;
   ownerUserId: string | null;
+  review: "reviewed" | "waiting" | "never";
   seats: SeatRow[];
+}
+
+export interface ReviewPayload {
+  team: { id: string; name: string; ownerUserId: string | null };
+  day: string;
+  brief: { text: string; reviewedAt: string | null };
+  overnight: Array<{ id: string; goal: string; status: string; kind: string; createdAt: string }>;
+  pending: Array<{ id: string; runId: string; kind: string; target: string; runGoal: string }>;
 }
 
 export interface GuardrailRow {
@@ -353,6 +362,15 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ teamId }),
     }),
+  getReview: (org: string, teamId: string) =>
+    req<ReviewPayload>(`/api/orgs/${org}/teams/${teamId}/review`),
+  putBrief: (org: string, teamId: string, text: string) =>
+    req<{ text: string; reviewedAt: string | null }>(`/api/orgs/${org}/teams/${teamId}/brief`, {
+      method: "PUT",
+      body: JSON.stringify({ text }),
+    }),
+  markReviewed: (org: string, teamId: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/teams/${teamId}/review`, { method: "POST" }),
   getTeamSeats: (org: string) =>
     req<{
       seats: Array<{

@@ -5,8 +5,14 @@ import {
   DuplicateSeat,
   SeatFrozen,
   UnknownMember,
+  getBrief,
+  listTeams,
+  markReviewed,
   moveSeat,
+  putBrief,
+  reviewPayload,
   setTeamOwner,
+  teamReviewState,
 } from "../src/teams.js";
 import { FakeDB, blankTables } from "./fake-db.js";
 
@@ -51,5 +57,58 @@ describe("team ownership", () => {
     await expect(moveSeat(e, "org1", "s3", "t2")).rejects.toBeInstanceOf(SeatFrozen);
     await moveSeat(e, "org1", "s1", "t1");
     expect(tables.seats.find((s) => s.id === "s1")?.team_id).toBe("t1");
+  });
+});
+
+describe("brief + review ritual", () => {
+  it("round-trips the daily brief", async () => {
+    const { env: e } = env();
+    expect(await getBrief(e, "org1", "t1")).toEqual({ text: "", reviewedAt: null });
+    await putBrief(e, "org1", "t1", "today matters: the Acme tickets");
+    expect(await getBrief(e, "org1", "t1")).toEqual({
+      text: "today matters: the Acme tickets",
+      reviewedAt: null,
+    });
+    await putBrief(e, "org1", "t1", "updated");
+    expect((await getBrief(e, "org1", "t1")).text).toBe("updated");
+    await expect(getBrief(e, "org1", "nope")).rejects.toBeInstanceOf(BadRole);
+  });
+
+  it("review states: never, waiting, reviewed", async () => {
+    const { env: e, tables } = env();
+    expect(await teamReviewState(e, "t1")).toBe("never");
+    tables.runs.push({ id: "r1", team_id: "t1", goal: "g", status: "done", kind: "work", created_at: "2026-01-01T00:00:00Z" });
+    expect(await teamReviewState(e, "t1")).toBe("waiting");
+    await markReviewed(e, "org1", "t1");
+    expect(await teamReviewState(e, "t1")).toBe("reviewed");
+    await expect(markReviewed(e, "org1", "nope")).rejects.toBeInstanceOf(BadRole);
+  });
+
+  it("a brief alone waits for review", async () => {
+    const { env: e } = env();
+    await putBrief(e, "org1", "t2", "hello");
+    expect(await teamReviewState(e, "t2")).toBe("waiting");
+  });
+
+  it("overnight shows only runs since the last review, plus pending", async () => {
+    const { env: e, tables } = env();
+    tables.team_briefs.push({ team_id: "t1", day: "2026-01-01", text: "x", reviewed_at: "2026-01-02T00:00:00Z" });
+    tables.runs.push({ id: "r-old", team_id: "t1", goal: "old", status: "done", kind: "work", created_at: "2026-01-01T12:00:00Z" });
+    tables.runs.push({ id: "r-new", team_id: "t1", goal: "new", status: "done", kind: "work", created_at: "2026-01-03T12:00:00Z" });
+    tables.actions.push({ id: "a1", run_id: "r-new", kind: "linear.create_issue", target: "ENG-1", status: "pending" });
+    const p = await reviewPayload(e, "org1", "t1");
+    expect(p.team.name).toBe("Team 1");
+    expect(p.overnight.map((r) => r.id)).toEqual(["r-new"]);
+    expect(p.pending.map((a) => a.id)).toEqual(["a1"]);
+    expect(p.pending[0]?.runGoal).toBe("new");
+    await expect(reviewPayload(e, "org1", "nope")).rejects.toBeInstanceOf(BadRole);
+  });
+
+  it("listTeams carries the review state", async () => {
+    const { env: e, tables } = env();
+    tables.runs.push({ id: "r1", team_id: "t1", goal: "g", status: "done", kind: "work", created_at: "2026-01-01T00:00:00Z" });
+    const teams = await listTeams(e, "org1");
+    expect(teams.find((t) => t.id === "t1")?.review).toBe("waiting");
+    expect(teams.find((t) => t.id === "t2")?.review).toBe("never");
   });
 });

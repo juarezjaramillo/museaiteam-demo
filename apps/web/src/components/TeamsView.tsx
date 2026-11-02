@@ -1,15 +1,23 @@
 import { useEffect, useState } from "react";
 import { api, type MemberRow, type TeamRow } from "../api.js";
 import { hireDisplayName, roleLabel } from "@museaiteam/shared";
+import { Review } from "./Review.js";
 
 function ownerName(team: TeamRow, members: MemberRow[]): string {
   if (!team.ownerUserId) return "Founder's bench";
   return members.find((m) => m.id === team.ownerUserId)?.email ?? "Former member";
 }
 
+const REVIEW_WORDS: Record<TeamRow["review"], string> = {
+  reviewed: "Reviewed ✓",
+  waiting: "Needs review",
+  never: "New",
+};
+
 export function Teams({ org, role }: { org: string; role: string }) {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [members, setMembers] = useState<MemberRow[]>([]);
+  const [reviewId, setReviewId] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const canDecide = role === "owner";
 
@@ -44,6 +52,19 @@ export function Teams({ org, role }: { org: string; role: string }) {
     }
   }
 
+  if (reviewId) {
+    return (
+      <Review
+        org={org}
+        teamId={reviewId}
+        onBack={() => {
+          setReviewId(null);
+          load().catch(() => {});
+        }}
+      />
+    );
+  }
+
   return (
     <div>
       <div className="page-head">
@@ -55,22 +76,32 @@ export function Teams({ org, role }: { org: string; role: string }) {
         {teams.map((t) => (
           <li key={t.id}>
             <div className="card-head">
-              <strong>{t.name}</strong>
+              <span>
+                <strong>{t.name}</strong> <span className="badge">{REVIEW_WORDS[t.review]}</span>
+              </span>
+              <button className="sm" onClick={() => setReviewId(t.id)}>
+                Review
+              </button>
+            </div>
+            <div className="card-head">
               {canDecide ? (
-                <select
-                  aria-label={`Who ${t.name} serves`}
-                  value={t.ownerUserId ?? ""}
-                  onChange={(e) => assign(t.id, e.target.value)}
-                >
-                  <option value="">Founder's bench</option>
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.email ?? "Member"}
-                    </option>
-                  ))}
-                </select>
+                <label className="dim">
+                  Serves{" "}
+                  <select
+                    aria-label={`Who ${t.name} serves`}
+                    value={t.ownerUserId ?? ""}
+                    onChange={(e) => assign(t.id, e.target.value)}
+                  >
+                    <option value="">Founder's bench</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.email ?? "Member"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               ) : (
-                <span className="dim">{ownerName(t, members)}</span>
+                <span className="dim">Serves {ownerName(t, members)}</span>
               )}
             </div>
             {t.seats.length === 0 && (
