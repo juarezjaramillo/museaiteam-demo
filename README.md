@@ -14,6 +14,8 @@ Built for the Meta Global AI Developer Hackathon (Startup track, solo).
 - Durable Object WebSocket broadcast for the live debate feed
 - Spark models via Meta Model API through Cloudflare AI Gateway
 - Auth.js + GitHub login, sessions in D1
+- Muse Image (`muse-image-1.0`): the marketer makes campaign images anchored on the store's real product photos.
+- Muse Spark vision: every image and product description is read back and checked against the run's real facts (with bounding boxes) before it ships; wrong ones are fixed with Muse Image edits.
 
 Full decision record: [docs/decisions.md](docs/decisions.md).
 
