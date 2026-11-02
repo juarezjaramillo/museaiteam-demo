@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   digestWeek,
+  saneCampaign,
   saneDiscount,
   saneFiles,
   saneSubtasks,
@@ -78,4 +79,16 @@ test("digest weeks key Mondays", () => {
   assert.equal(digestWeek(new Date("2026-10-26T12:00:00Z")), "2026-W44");
   assert.equal(digestWeek(new Date("2026-11-01T23:59:59Z")), "2026-W44");
   assert.equal(digestWeek(new Date("2026-11-02T00:00:01Z")), "2026-W45");
+});
+
+test("campaign plans clamp to printable shapes", () => {
+  assert.deepEqual(
+    saneCampaign({ formats: ["feed", "story", "feed", "banner"], headline: "One two three four five six seven", visual: "  Warm flat lay  " }),
+    { formats: ["feed", "story"], headline: "One two three four five six", visual: "Warm flat lay" }
+  );
+  assert.deepEqual(saneCampaign({}), {
+    formats: ["feed"],
+    headline: "Black Friday Sale",
+    visual: "Hero product shot on a warm studio backdrop",
+  });
 });

@@ -68,7 +68,17 @@ export function buildProof(
   revertPayload?: Record<string, unknown>,
   payload: Record<string, unknown> = {},
 ): Proof | null {
-  if (status !== "done") return null;
+  if (status !== "done") {
+    // Failed acts stay proof-less unless the act left an honest reason.
+    if (
+      status === "failed" &&
+      typeof payload.failReason === "string" &&
+      payload.failReason
+    ) {
+      return { summary: payload.failReason.slice(0, 280) };
+    }
+    return null;
+  }
   const rp = revertPayload ?? {};
   const url = /^https?:\/\//.test(target) ? target : clip(payload.url);
   const base: Proof = { summary: `${label}: ${target}` };

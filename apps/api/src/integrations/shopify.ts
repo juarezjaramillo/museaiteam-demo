@@ -80,6 +80,16 @@ export async function createDiscountCode(
   return { id: node.id, code };
 }
 
+/** Storefront name, so creatives print the real brand. */
+export async function shopName(shop: string, token: string): Promise<string | null> {
+  const data = await gql<{ shop: { name: string } }>(
+    shop,
+    token,
+    `{ shop { name } }`,
+  );
+  return data.shop?.name ?? null;
+}
+
 export async function deleteDiscountCode(
   shop: string,
   token: string,

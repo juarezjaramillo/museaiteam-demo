@@ -76,13 +76,18 @@ export async function postMessage(
   token: string,
   channel: string,
   text: string,
+  blocks?: Array<Record<string, unknown>>,
 ): Promise<{ channel: string; ts: string }> {
   try {
     await api(token, "conversations.join", { channel });
   } catch (err) {
     if (!String(err).includes("already_in_channel")) throw err;
   }
-  const json = await api(token, "chat.postMessage", { channel, text });
+  const json = await api(token, "chat.postMessage", {
+    channel,
+    text,
+    ...(blocks ? { blocks } : {}),
+  });
   return { channel, ts: json.ts as string };
 }
 

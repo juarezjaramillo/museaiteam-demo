@@ -29,6 +29,43 @@ export function saneDiscount(raw: {
   return { percent, title, startInDays };
 }
 
+export type CampaignFormat = "feed" | "story";
+
+export interface SaneCampaign {
+  formats: CampaignFormat[];
+  headline: string;
+  visual: string;
+}
+
+/** Campaign plans stay printable: 1–2 real formats, a short headline. */
+export function saneCampaign(raw: {
+  formats?: unknown;
+  headline?: unknown;
+  visual?: unknown;
+}): SaneCampaign {
+  const formats: CampaignFormat[] = [];
+  if (Array.isArray(raw.formats)) {
+    for (const f of raw.formats) {
+      if ((f === "feed" || f === "story") && !formats.includes(f)) {
+        formats.push(f);
+      }
+      if (formats.length >= 2) break;
+    }
+  }
+  if (formats.length === 0) formats.push("feed");
+  const words =
+    typeof raw.headline === "string"
+      ? raw.headline.trim().split(/\s+/).filter(Boolean).slice(0, 6)
+      : [];
+  const headline =
+    words.length > 0 ? words.join(" ").slice(0, 80) : "Black Friday Sale";
+  const visual =
+    typeof raw.visual === "string" && raw.visual.trim().length > 0
+      ? raw.visual.trim().slice(0, 200)
+      : "Hero product shot on a warm studio backdrop";
+  return { formats, headline, visual };
+}
+
 export type TicketPriority = "HIGH" | "MEDIUM" | "LOW";
 
 /** HubSpot priority enum; anything unrecognized lands in the middle. */

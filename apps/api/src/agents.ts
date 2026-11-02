@@ -3,6 +3,7 @@ import {
   SEAT_ROLES,
   normalizeVoteMatrix,
   playbookBlock,
+  saneCampaign,
   saneDiscount,
   saneFiles,
   saneSubtasks,
@@ -11,6 +12,7 @@ import {
   triagePriority,
   type AgentRole,
   type CastVote as SharedVote,
+  type SaneCampaign,
   type SaneTactic,
   type SeatRole,
   type SaneDiscount,
@@ -819,6 +821,43 @@ export async function runProductCopy(
     temperature: 0.8,
   });
   return { description: res.data.description, tokens: res.tokensUsed };
+}
+
+export const CampaignPlan = z.object({
+  formats: z.array(z.enum(["feed", "story"])).min(1).max(2),
+  headline: z.string(),
+  visual: z.string(),
+});
+export type CampaignPlan = z.infer<typeof CampaignPlan>;
+
+/** The marketer's creative brief: ruling into bounded image formats. */
+export async function runCampaignPlan(
+  env: Env,
+  goal: string,
+  decision: string,
+): Promise<{ plan: SaneCampaign; tokens: number }> {
+  const client = new SparkClient(env);
+  const res = await client.chat(CampaignPlan, {
+    system:
+      "You are the growth marketer. You brief campaign creatives: real formats, a short headline, one visual idea.",
+    user: [
+      `Goal: ${goal}`,
+      `Decision: ${decision}`,
+      "",
+      "Brief 1 or 2 image formats (feed is a 1080x1350 portrait post, story is a 1080x1920 vertical story), a headline of at most 6 words, and a one-line visual idea.",
+      "Do NOT invent offer facts: no percent, no code, no dates. The studio prints the real offer from this run.",
+      'Reply JSON: {"formats": ["feed"], "headline": "...", "visual": "..."}.',
+    ].join("\n"),
+    temperature: 0.8,
+  });
+  return {
+    plan: saneCampaign({
+      formats: res.data.formats,
+      headline: res.data.headline,
+      visual: res.data.visual,
+    }),
+    tokens: res.tokensUsed,
+  };
 }
 
 export const DistilledTactics = z.object({

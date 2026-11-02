@@ -205,6 +205,24 @@ export async function createRunRecord(
   return { pageId: page.id, url: page.url, followupId: child.id };
 }
 
+/** Append public image URLs as external image blocks to a page. */
+export async function appendImageBlocks(
+  token: string,
+  pageId: string,
+  urls: string[],
+): Promise<void> {
+  await nq(token, `/v1/blocks/${pageId}/children`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      children: urls.map((url) => ({
+        object: "block",
+        type: "image",
+        image: { type: "external", external: { url } },
+      })),
+    }),
+  });
+}
+
 export async function archivePage(token: string, id: string): Promise<void> {
   await nq(token, `/v1/pages/${id}`, {
     method: "PATCH",

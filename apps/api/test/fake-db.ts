@@ -35,6 +35,8 @@ export interface FakeTables {
   org_members: Row[];
   team_briefs: Row[];
   rulings: Row[];
+  public_images: Row[];
+  provider_config: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -67,6 +69,8 @@ export function blankTables(): FakeTables {
     org_members: [],
     team_briefs: [],
     rulings: [],
+    public_images: [],
+    provider_config: [],
   };
 }
 
@@ -255,7 +259,8 @@ export class FakeDB {
             return ((r ? { server_id: r.server_id } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT config FROM provider_config WHERE org_id = ? AND provider = ?")) {
-            return (null as T) ?? null;
+            const r = t.provider_config.find((x) => x.org_id === p[0] && x.provider === p[1]);
+            return ((r ? { config: r.config } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT seat_cutover FROM orgs WHERE id = ?")) {
             const r = t.orgs.find((x) => x.id === p[0]);
@@ -322,6 +327,33 @@ export class FakeDB {
           if (q.startsWith("SELECT id FROM seat_mail WHERE seat_id = ? AND message_id = ?")) {
             const r = t.seat_mail.find((x) => x.seat_id === p[0] && x.message_id === p[1]);
             return ((r ? { id: r.id } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT target, payload FROM actions WHERE run_id = ?")) {
+            const rows = t.actions.filter(
+              (a) =>
+                a.run_id === p[0] &&
+                (a.kind === "shopify.targeted_discount" || a.kind === "shopify.create_discount") &&
+                a.status === "done",
+            );
+            const last = rows[rows.length - 1];
+            return ((last ? { target: last.target, payload: last.payload } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT revert_payload FROM actions WHERE run_id = ?")) {
+            const rows = t.actions.filter(
+              (a) =>
+                a.run_id === p[0] &&
+                (a.kind === "notion.run_page" || a.kind === "notion.create_page") &&
+                a.status === "done",
+            );
+            const last = rows[rows.length - 1];
+            return ((last ? { revert_payload: last.revert_payload ?? null } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT r2_key FROM public_images WHERE token = ?")) {
+            const r = t.public_images.find((x) => x.token === p[0] && !x.revoked_at);
+            return ((r ? { r2_key: r.r2_key } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT systems, write_scope FROM guardrails")) {
+            return (null as T) ?? null;
           }
           if (q.startsWith("SELECT id FROM proposals_out WHERE org_id = ? AND kind = 'signup'")) {
             const r = t.proposals_out.find(
@@ -528,6 +560,13 @@ export class FakeDB {
             }
             return { results: out.slice(0, 50) as T[] };
           }
+          if (q.startsWith("SELECT kind FROM actions WHERE run_id = ? AND status = 'done'")) {
+            return {
+              results: t.actions
+                .filter((a) => a.run_id === p[0] && a.status === "done")
+                .map((a) => ({ kind: a.kind })) as T[],
+            };
+          }
           if (q.includes("FROM actions") && q.includes("run_id = ?")) {
             if (q.includes("NOT IN")) {
               const reviewed = new Set(
@@ -642,6 +681,24 @@ export class FakeDB {
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("UPDATE oauth_tokens SET access_token_enc = ?")) {
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO actions (id, run_id, kind, target, payload, status, revert_payload, proof)")) {
+            t.actions.push({
+              id: p[0], run_id: p[1], kind: p[2], target: p[3],
+              payload: p[4], status: p[5], revert_payload: p[6] ?? null, proof: p[7] ?? null,
+            });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO public_images")) {
+            t.public_images.push({
+              token: p[0], r2_key: p[1], org_id: p[2], action_id: p[3], revoked_at: null,
+            });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE public_images SET revoked_at = ? WHERE token = ?")) {
+            const r = t.public_images.find((x) => x.token === p[1]);
+            if (r) r.revoked_at = p[0];
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO actions (id, run_id, kind, target, payload, status)")) {

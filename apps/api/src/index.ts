@@ -54,6 +54,7 @@ import {
 import { runBaseline } from "./baseline.js";
 import { BoxOffline, BoxQuota, boxSpend, provider, reconcileBoxes } from "./box.js";
 import { audit, getRun } from "./db.js";
+import { servePublicImage } from "./creative.js";
 import { nudgeSeatRequests, teamSeats } from "./enroll.js";
 import { getSeat, listSeatMail, markMailRead, receiveSeatMail } from "./seat-mail.js";
 import {
@@ -294,6 +295,9 @@ document.getElementById("i").innerHTML=(j.incidents||[]).map(n=>"<li>"+n.event+"
 </body></html>`;
 
 app.get("/status", (c) => c.html(STATUS_PAGE));
+
+/** Public campaign images: no auth, so Slack and Notion can fetch them. */
+app.get("/a/:token", async (c) => servePublicImage(c.env, c.req.param("token")));
 
 // Approval decisions intentionally live above the requireSession gate
 // so unauthenticated and viewer-role deciders both 403. (Missing runs

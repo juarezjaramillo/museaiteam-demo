@@ -98,6 +98,7 @@ import {
 import { addEvent, goalTimeline, recordRunSummary } from "./goals.js";
 import { addFeedback } from "./feedback.js";
 import { executeRevert } from "./revert.js";
+import { executeCreativeAct } from "./creative.js";
 import { chargeIdea } from "./allowance.js";
 import { createWorkRun, promoteQueued, settleFailedRun } from "./staffing.js";
 import { hireToken, markSeatLost, seatForRole, seatReadyForServer, seatToolIds } from "./seat-creds.js";
@@ -531,9 +532,10 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     status: Action["status"],
     revertPayload?: Record<string, unknown>,
     payload: Record<string, unknown> = {},
+    actionId?: string,
   ): Promise<string> {
     const action: Action = {
-      id: crypto.randomUUID(),
+      id: actionId ?? crypto.randomUUID(),
       runId,
       kind,
       target,
@@ -1038,6 +1040,9 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           await this.recordAction(runId, "shopify.targeted_discount", discount.code, "done", {
             shop,
             id: discount.id,
+          }, {
+            code: discount.code,
+            percent: plan.percent,
           });
         } catch (err) {
           await this.recordAction(runId, "shopify.targeted_discount", "discount", "failed");
@@ -1089,6 +1094,26 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
         error: String(err).slice(0, 600),
       });
     }
+  }
+
+  /** Maya's image studio, after the discount and Notion acts it builds on. */
+  private async creativeAction(
+    orgId: string,
+    runId: string,
+    goal: string,
+    decision: string,
+  ): Promise<void> {
+    await executeCreativeAct(this.env, {
+      orgId,
+      runId,
+      goal,
+      decision,
+      hooks: {
+        recordAction: (kind, target, status, revertPayload, payload, actionId) =>
+          this.recordAction(runId, kind, target, status, revertPayload, payload ?? {}, actionId),
+        addTokens: (n) => this.addTokens(runId, n),
+      },
+    });
   }
 
   private async hubspotAction(
@@ -1421,6 +1446,9 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           ],
         );
       }
+      if (!doneKinds.has("creative.campaign_image")) {
+        await this.creativeAction(run.org_id, runId, run.goal, ruling.decision);
+      }
       await this.runCloseouts(runId, run.org_id, ruling.decision);
       await this.mcpLoopAction(run.org_id, runId, run.goal, ruling.decision);
     } else {
@@ -1672,7 +1700,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
   }
 
   /**
-   * Sandbox act: no provider calls, no closeouts — the six intents a
+   * Sandbox act: no provider calls, no closeouts — the seven intents a
    * connected run would have shipped, recorded as would-do.
    */
   private async sandboxAct(
@@ -1695,6 +1723,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       { kind: "linear.create_issue", target: "sample project: tracking issue" },
       { kind: "slack.post_message", target: "sample channel: team update" },
       { kind: "shopify.targeted_discount", target: "sample store: targeted discount" },
+      { kind: "creative.campaign_image", target: "sample studio: campaign images" },
       { kind: "hubspot.triage_ticket", target: "sample pipeline: triaged ticket" },
       { kind: "notion.create_page", target: "sample workspace: decision page" },
     ];

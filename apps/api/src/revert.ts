@@ -167,6 +167,19 @@ export async function executeRevert(
           ...(rp.priorPriority ? { priority: String(rp.priorPriority) } : {}),
           ...(rp.priorStage ? { stage: String(rp.priorStage) } : {}),
         });
+      } else if (row.kind === "creative.campaign_image") {
+        const tokens = Array.isArray(rp.tokens) ? rp.tokens : [];
+        const now = new Date().toISOString();
+        for (const t of tokens) {
+          await env.DB.prepare("UPDATE public_images SET revoked_at = ? WHERE token = ?")
+            .bind(now, String(t))
+            .run();
+        }
+        if (rp.slackChannel && rp.slackTs) {
+          const token = await hireToken(env, orgId, teamId, "slack");
+          if (!token) throw new Error("slack not connected");
+          await deleteMessage(token, String(rp.slackChannel), String(rp.slackTs));
+        }
       } else if (row.kind === "notion.create_page") {
         const token = await hireToken(env, orgId, teamId, "notion");
         if (!token) throw new Error("notion not connected");
