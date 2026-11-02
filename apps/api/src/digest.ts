@@ -35,7 +35,7 @@ export async function sendRunDigest(env: Env, runId: string): Promise<void> {
   if ((claimed.meta.changes ?? 0) !== 1) return;
   try {
     const ruling = await env.DB.prepare(
-      "SELECT decision, decided_by FROM rulings WHERE run_id = ?",
+      "SELECT decision, decided_by FROM rulings WHERE run_id = ? ORDER BY attempt DESC",
     )
       .bind(runId)
       .first<{ decision: string; decided_by: string }>();

@@ -4,6 +4,7 @@ import {
   SANDBOX_ORG_ID,
   SANDBOX_VOTE_WINDOW_MS,
   VOTE_TIMEOUT_MS,
+  hireDisplayName,
   sandboxPreset,
   squadPlan,
   type SeatRole,
@@ -232,6 +233,7 @@ export async function createWorkRun(
     squad,
     queued,
   });
+  await recordBorrowing(env, input.orgId, runId, teamId, squad, queued);
   if (input.goalId) {
     await addEvent(env, input.goalId, "run.started", input.goal.slice(0, 80), {
       runId,
@@ -242,6 +244,108 @@ export async function createWorkRun(
     await env.GOAL_RUN.create({ params: { runId } });
   }
   return { runId, status: queued ? "queued" : "open", squad };
+}
+
+function andList(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+interface SeatHome {
+  role: string;
+  team_id: string;
+  name: string;
+}
+
+/**
+ * Cross-team borrowing, logged where the founder looks. Squads are
+ * roles picked org-wide; a role whose hired seat sits on another team
+ * is a borrow: one audit line on the run, one notice to the founder.
+ * A queued run waiting on another team's hire also gets a manager
+ * ruling at attempt 0 — session rulings start at 1, so the two can
+ * never collide, and latest-ruling reads still surface the session.
+ */
+export async function recordBorrowing(
+  env: Env,
+  orgId: string,
+  runId: string,
+  teamId: string,
+  squad: SeatRole[],
+  queued: boolean,
+): Promise<void> {
+  const homes = await env.DB.prepare(
+    `SELECT s.role, s.team_id, t.name FROM seats s
+     JOIN teams t ON t.id = s.team_id
+     WHERE t.org_id = ? AND s.hired = 1 ORDER BY s.rowid`,
+  )
+    .bind(orgId)
+    .all<SeatHome>();
+  const rows = homes.results ?? [];
+  const own =
+    rows.find((r) => r.team_id === teamId)?.name ??
+    (await env.DB.prepare("SELECT name FROM teams WHERE id = ?")
+      .bind(teamId)
+      .first<{ name: string }>())?.name ??
+    "This team";
+  const borrowed: Array<{ role: string; from: string }> = [];
+  for (const role of squad) {
+    const seats = rows.filter((r) => r.role === role);
+    if (seats.length === 0 || seats.some((s) => s.team_id === teamId)) continue;
+    borrowed.push({ role, from: seats[0].name });
+  }
+  if (borrowed.length > 0) {
+    const names = borrowed.map((b) => hireDisplayName(b.role));
+    const lenders = [...new Set(borrowed.map((b) => b.from))];
+    await audit(env, runId, "manager", "run.borrowed", {
+      roles: borrowed.map((b) => b.role),
+      from: lenders,
+    });
+    await notify(env, orgId, {
+      kind: "run.borrowed",
+      title: `${own} borrowed ${andList(names)} for tonight`,
+      body: `${andList(names)} ${names.length === 1 ? "is" : "are"} on loan from ${andList(lenders)}.`,
+    });
+  }
+  if (!queued) return;
+  const active = await env.DB.prepare(
+    `SELECT r.id, r.team_id, r.goal, r.lineup, t.name FROM runs r
+     LEFT JOIN teams t ON t.id = r.team_id
+     WHERE r.org_id = ? AND r.kill_flag = 0
+     AND r.status IN (${ACTIVE_STATUSES.map(() => "?").join(",")})`,
+  )
+    .bind(orgId, ...ACTIVE_STATUSES)
+    .all<{ id: string; team_id: string | null; goal: string; lineup: string; name: string | null }>();
+  for (const row of active.results ?? []) {
+    if (!row.team_id || row.team_id === teamId) continue;
+    let lineup: unknown = [];
+    try {
+      lineup = JSON.parse(row.lineup);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(lineup)) continue;
+    const clash = squad.find((r) => (lineup as unknown[]).includes(r));
+    if (!clash) continue;
+    const holder = row.name ?? "Another team";
+    await env.DB.prepare(
+      `INSERT INTO rulings (id, run_id, decision, rationale, decided_by,
+         attempt) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        runId,
+        "wait",
+        `${hireDisplayName(clash)} is busy on ${holder}'s \u201c${row.goal.slice(0, 80)}\u201d tonight — this session starts when they're free.`,
+        "manager",
+        0,
+      )
+      .run();
+    await audit(env, runId, "manager", "run.arbitrated", {
+      role: clash,
+      blockedBy: row.id,
+    });
+    return;
+  }
 }
 
 export class SandboxThrottled extends Error {
