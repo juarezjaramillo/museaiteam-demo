@@ -457,6 +457,7 @@ export const api = {
         throttled: boolean;
       };
       pricePerWorker: string;
+      unitCents: number;
       checkoutReady: boolean;
     }>(`/api/orgs/${org}/billing`),
   createCheckout: (org: string) =>

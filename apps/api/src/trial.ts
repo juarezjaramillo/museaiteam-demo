@@ -1,7 +1,9 @@
 import {
   graceEndsAt,
+  hirePrice,
   trialDecision,
   trialStatus,
+  usd,
   type TrialRow,
   type TrialStatus,
 } from "@museaiteam/shared";
@@ -73,11 +75,12 @@ export async function trialGate(env: Env, orgId: string): Promise<TrialGate> {
   };
 }
 
-export function trialExpiredBody(status: TrialStatus) {
+export function trialExpiredBody(status: TrialStatus, seats: number) {
+  const price = usd(hirePrice(seats));
   return {
     error: "trial_expired",
     trial: status,
-    subscribe: { pricePerWorker: "$499", checkoutUrl: null as string | null },
-    message: "Trial expired — subscribe to keep running ($499/worker).",
+    subscribe: { pricePerWorker: price, checkoutUrl: null as string | null },
+    message: `Trial expired — subscribe to keep running (${price}/worker).`,
   };
 }

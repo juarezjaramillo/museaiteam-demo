@@ -3,11 +3,13 @@ import { zValidator } from "@hono/zod-validator";
 import {
   PROVIDER_IDS,
   SEAT_ROLES,
+  hirePrice,
   mayDecideApproval,
   normalizeShop,
   ownerFor,
   signState,
   trialStatus,
+  usd,
   validateProviderConfig,
   verifyState,
 } from "@museaiteam/shared";
@@ -310,7 +312,7 @@ app.post(
     const user = await approvalDecider(c, run.org_id);
     if (!user) return c.json({ error: "forbidden" }, 403);
     const gate = await trialGate(c.env, run.org_id);
-    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, run.org_id)), 403);
     const body = c.req.valid("json");
     const res = await decidePreApproval(c.env, {
       runId: run.id,
@@ -363,7 +365,7 @@ app.post(
     const user = await approvalDecider(c, run.org_id);
     if (!user) return c.json({ error: "forbidden" }, 403);
     const gate = await trialGate(c.env, run.org_id);
-    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, run.org_id)), 403);
     try {
       const res = await requestChanges(c.env, {
         orgId: run.org_id,
@@ -576,7 +578,7 @@ app.post(
       return c.json({ error: "too many sessions — try again in an hour" }, 429);
     }
     const gate = await trialGate(c.env, orgId);
-    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, orgId)), 403);
     try {
       // Goal-less runs get a one-shot wrapper goal: every run belongs
       // somewhere, and the dashboard has a single shape to render.
@@ -673,7 +675,7 @@ app.post("/api/runs/:id/baseline", async (c) => {
   const access = await runRole(c, run, ...DECIDERS);
   if (access !== "ok") return c.json({ error: access === "notfound" ? "not found" : "forbidden" }, access === "notfound" ? 404 : 403);
   const gate = await trialGate(c.env, run.org_id);
-  if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+  if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, run.org_id)), 403);
   try {
     return c.json(await runBaseline(c.env, id));
   } catch (err) {
@@ -1623,7 +1625,7 @@ app.post(
     const org = await roleOrg(c, ...DECIDERS);
     if (!org) return c.json({ error: "forbidden" }, 403);
     const gate = await trialGate(c.env, org);
-    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, org)), 403);
     const res = await decideToolApproval(c.env, {
       approvalId: c.req.param("id"),
       orgId: org,
@@ -1990,7 +1992,7 @@ app.post("/api/orgs/:org/approvals/approve-all", async (c) => {
   const user = await approvalDecider(c, org);
   if (!user) return c.json({ error: "forbidden" }, 403);
   const gate = await trialGate(c.env, org);
-  if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+  if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, org)), 403);
   const pend = await listApprovals(c.env, org, "pending");
   let approved = 0;
   const failed: string[] = [];
@@ -2074,7 +2076,7 @@ app.post(
     const org = await roleOrg(c, ...DECIDERS);
     if (!org) return c.json({ error: "forbidden" }, 403);
     const gate = await trialGate(c.env, org);
-    if (!gate.allowed) return c.json(trialExpiredBody(gate.status), 403);
+    if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, org)), 403);
     const b = c.req.valid("json");
     const res = await decideProposal(c.env, org, c.req.param("id"), b.decision, b.note);
     if (res === "notfound") return c.json({ error: "not found" }, 404);
@@ -2293,12 +2295,15 @@ app.get("/api/orgs/:org/billing", async (c) => {
   )
     .bind(org)
     .first<{ subscribed: number; sub_status: string }>();
+  const seats = await rosterSeats(c.env, org);
+  const unitCents = hirePrice(seats);
   return c.json({
     subscribed: (row?.subscribed ?? 0) === 1,
     subStatus: row?.sub_status ?? "none",
-    seats: await rosterSeats(c.env, org),
+    seats,
     meter: await getMeter(c.env, org),
-    pricePerWorker: "$499",
+    pricePerWorker: usd(unitCents),
+    unitCents,
     checkoutReady: stripeConfigured(c.env),
   });
 });

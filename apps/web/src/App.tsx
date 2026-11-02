@@ -332,7 +332,7 @@ export function App() {
               `Trial expired — extra time: ${trial.daysLeft} days left.`}
             {trial.state === "expired" && (
               <>
-                Trial expired — subscribe to keep running ($499/worker).{" "}
+                Trial expired — subscribe to keep running.{" "}
                 <button className="sm" onClick={() => go("billing")}>
                   See plans
                 </button>

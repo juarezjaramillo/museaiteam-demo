@@ -2,7 +2,45 @@
 // boundaries and the signature check are unit-tested; the API only
 // supplies sums from D1 and the raw webhook body.
 
-export const PRICE_PER_WORKER_CENTS = 49900;
+/**
+ * Volume tiers: the price per hire falls as the roster grows, to a
+ * $299 floor. Numbers are proposed, tiers are the design. One pure
+ * function prices everything — checkout, meter, Billing page, trial
+ * walls — so two prices can never disagree.
+ */
+export interface HireTier {
+  upTo: number;
+  cents: number;
+}
+
+export const HIRE_TIERS: HireTier[] = [
+  { upTo: 2, cents: 49900 },
+  { upTo: 5, cents: 44900 },
+  { upTo: 10, cents: 39900 },
+  { upTo: 20, cents: 34900 },
+  { upTo: Number.POSITIVE_INFINITY, cents: 29900 },
+];
+
+export const FLOOR_CENTS = 29900;
+
+/** Price per hire in cents for a roster of `seats`. Total: never throws. */
+export function hirePrice(seats: number): number {
+  const n = Math.max(1, Math.floor(seats));
+  return HIRE_TIERS.find((t) => n <= t.upTo)?.cents ?? FLOOR_CENTS;
+}
+
+/** Next price break, or null at the floor: "add N more to pay $X". */
+export function nextTier(seats: number): { at: number; cents: number } | null {
+  const n = Math.max(1, Math.floor(seats));
+  const i = HIRE_TIERS.findIndex((t) => n <= t.upTo);
+  if (i < 0 || i + 1 >= HIRE_TIERS.length) return null;
+  return { at: HIRE_TIERS[i].upTo + 1, cents: HIRE_TIERS[i + 1].cents };
+}
+
+export function usd(cents: number): string {
+  return `$${(cents / 100).toLocaleString("en-US")}`;
+}
+
 export const FAIR_USE_TOKENS_PER_WORKER = 25_000_000;
 export const THROTTLED_RUNS_PER_DAY = 1;
 const WEBHOOK_TOLERANCE_SEC = 300;

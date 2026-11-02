@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
-import { monthLabel } from "@museaiteam/shared";
+import { monthLabel, nextTier, usd } from "@museaiteam/shared";
 
 interface BillingInfo {
   subscribed: boolean;
@@ -15,6 +15,7 @@ interface BillingInfo {
     throttled: boolean;
   };
   pricePerWorker: string;
+  unitCents: number;
   checkoutReady: boolean;
 }
 
@@ -43,13 +44,14 @@ export function Billing({ org }: { org: string }) {
   }
 
   if (!info) return <section>{note || "…"}</section>;
-  const monthly = 499 * info.seats;
+  const monthly = (info.unitCents * info.seats) / 100;
+  const nx = nextTier(info.seats);
   return (
     <section>
       <div className="page-head">
         <h1>Billing</h1>
       </div>
-      <p className="page-sub">$499 per worker per month. Cancel anytime.</p>
+      <p className="page-sub">Workers get cheaper as you add more — down to $299 each. Cancel anytime.</p>
       {note && <p className="error">{note}</p>}
       {info.subStatus === "past_due" && (
         <div className="banner warn">
@@ -68,6 +70,11 @@ export function Billing({ org }: { org: string }) {
       <p>
         {info.seats} worker{info.seats === 1 ? "" : "s"} × {info.pricePerWorker} = $
         {monthly.toLocaleString("en-US")}/month.
+      </p>
+      <p className="dim">
+        {nx
+          ? `Add ${nx.at - info.seats} more to pay ${usd(nx.cents)} each.`
+          : "You're at the best price."}
       </p>
       <p className={info.meter.throttled ? "error" : "dim"}>
         {monthLabel(info.meter.month) || "This month"}:{" "}

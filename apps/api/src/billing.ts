@@ -1,8 +1,8 @@
 import {
-  PRICE_PER_WORKER_CENTS,
   allowanceFor,
   buildUpgradeEmail,
   fairUseBand,
+  hirePrice,
   isThrottled,
   perWorker,
   runsAllowedToday,
@@ -19,6 +19,7 @@ export interface Meter {
   allowance: number;
   perWorker: number;
   throttled: boolean;
+  unitCents: number;
 }
 
 export async function rosterSeats(env: Env, orgId: string): Promise<number> {
@@ -57,6 +58,7 @@ export async function getMeter(env: Env, orgId: string): Promise<Meter> {
     allowance: allowanceFor(seats),
     perWorker: perWorker(total, seats),
     throttled: isThrottled(total, seats),
+    unitCents: hirePrice(seats),
   };
 }
 
@@ -155,7 +157,7 @@ export function stripeConfigured(env: Env): boolean {
   return Boolean(env.STRIPE_SECRET_KEY);
 }
 
-/** One Checkout session per call: $499 × roster seats, monthly. */
+/** One Checkout session per call: tier price × roster seats, monthly. */
 export async function createCheckoutSession(
   env: Env,
   orgId: string,
@@ -164,7 +166,7 @@ export async function createCheckoutSession(
   const seats = await rosterSeats(env, orgId);
   const form = new URLSearchParams({
     mode: "subscription",
-    "line_items[0][price_data][unit_amount]": String(PRICE_PER_WORKER_CENTS),
+    "line_items[0][price_data][unit_amount]": String(hirePrice(seats)),
     "line_items[0][price_data][currency]": "usd",
     "line_items[0][price_data][recurring][interval]": "month",
     "line_items[0][price_data][product_data][name]": "AI Team worker",

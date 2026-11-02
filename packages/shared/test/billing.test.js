@@ -5,7 +5,9 @@ import {
   allowanceFor,
   buildUpgradeEmail,
   fairUseBand,
+  hirePrice,
   isThrottled,
+  nextTier,
   perWorker,
   runsAllowedToday,
   verifyStripeSignature,
@@ -70,6 +72,28 @@ test("tampered payload, wrong secret, and stale timestamps fail", async () => {
   assert.equal(await verifyStripeSignature(payload, header, "whsec_x", NOW + 301), false);
   assert.equal(await verifyStripeSignature(payload, "garbage", "whsec_x", NOW), false);
   assert.equal(await verifyStripeSignature(payload, `t=${NOW},v1=${"0".repeat(64)}`, "whsec_x", NOW), false);
+});
+
+test("hire price falls with roster size, to a floor", () => {
+  assert.equal(hirePrice(0), 49900);
+  assert.equal(hirePrice(1), 49900);
+  assert.equal(hirePrice(2), 49900);
+  assert.equal(hirePrice(3), 44900);
+  assert.equal(hirePrice(5), 44900);
+  assert.equal(hirePrice(6), 39900);
+  assert.equal(hirePrice(10), 39900);
+  assert.equal(hirePrice(11), 34900);
+  assert.equal(hirePrice(20), 34900);
+  assert.equal(hirePrice(21), 29900);
+  assert.equal(hirePrice(500), 29900);
+});
+
+test("next tier names the break, null at the floor", () => {
+  assert.deepEqual(nextTier(1), { at: 3, cents: 44900 });
+  assert.deepEqual(nextTier(5), { at: 6, cents: 39900 });
+  assert.deepEqual(nextTier(20), { at: 21, cents: 29900 });
+  assert.equal(nextTier(21), null);
+  assert.equal(nextTier(500), null);
 });
 
 test("upgrade email names usage, cap, and billing link", () => {

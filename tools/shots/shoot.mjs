@@ -125,7 +125,8 @@ const FIX = {
     subStatus: "active",
     seats: 3,
     meter: { month: "2026-10", totalTokens: 120000, seats: 3, allowance: 500000, perWorker: 40000, throttled: false },
-    pricePerWorker: "$499",
+    pricePerWorker: "$449",
+    unitCents: 44900,
     checkoutReady: true,
   },
   "/api/orgs/o1/connections": {
