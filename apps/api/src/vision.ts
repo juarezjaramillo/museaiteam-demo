@@ -115,6 +115,143 @@ export interface CopyPhotoResult {
   tokens: number;
 }
 
+export const PageCopyCheck = z.object({
+  found: z.boolean(),
+  read: z.string(),
+  box: VisionBox.optional(),
+});
+export type PageCopyCheck = z.infer<typeof PageCopyCheck>;
+
+export interface PageCopyResult {
+  found: boolean;
+  read: string;
+  box?: [number, number, number, number];
+  tokens: number;
+}
+
+function includesNormalized(haystack: string, needle: string): boolean {
+  const h = haystack.replace(/\s+/g, " ").trim().toLowerCase();
+  const n = needle.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!n) return false;
+  return h.includes(n) || (h.length >= 20 && n.includes(h));
+}
+
+/** Is the new copy live on the product page? Found only when the model points at it AND the words match. */
+export async function checkProductPage(
+  env: Env,
+  png: Uint8Array,
+  expectedCopyStart: string,
+  client?: SparkClient,
+): Promise<PageCopyResult> {
+  const c = client ?? new SparkClient(env);
+  const out = await c.chatWithImages(PageCopyCheck, {
+    system:
+      "You are a careful proofreader and object grounding expert. You read product pages exactly and ground what you find with a bounding box. Reply JSON only.",
+    user: [
+      "Product page screenshot above. Is the product description starting with (or clearly containing) this sentence?",
+      `"""${expectedCopyStart}"""`,
+      "",
+      "Read the description text you actually see and give its bounding box [x_min, y_min, x_max, y_max] on a 0–1000 grid with (0,0) top-left.",
+      'Return JSON only: {"found": true, "read": "<description text as seen>", "box": [...]}.',
+    ].join("\n"),
+    images: [png],
+    temperature: 0.1,
+  });
+  const d = out.data;
+  return {
+    found: d.found && includesNormalized(d.read, expectedCopyStart),
+    read: d.read,
+    ...(d.box ? { box: d.box } : {}),
+    tokens: out.tokensUsed,
+  };
+}
+
+/** Parse storefront money ("$3.80", "−$3.80", "$1,234.56") or null. */
+export function parseMoney(s: string): number | null {
+  const cleaned = s
+    .replace(/[−–—]/g, "-")
+    .replace(/[^0-9.\-]/g, "");
+  if (!cleaned || cleaned === "-" || cleaned === "." || cleaned === "-.") return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+export const CheckoutCheck = z.object({
+  codeApplied: z.boolean(),
+  codeRead: z.string(),
+  discountAmountRead: z.string(),
+  subtotalRead: z.string(),
+  totalRead: z.string(),
+  boxes: z.array(z.object({ label: z.string(), box: VisionBox })),
+  pass: z.boolean(),
+});
+export type CheckoutCheck = z.infer<typeof CheckoutCheck>;
+
+export interface CheckoutResult {
+  codeApplied: boolean;
+  codeRead: string;
+  discountAmountRead: string;
+  subtotalRead: string;
+  totalRead: string;
+  boxes: Array<{ label: string; box: [number, number, number, number] }>;
+  pass: boolean;
+  tokens: number;
+}
+
+export interface CheckoutOffer {
+  code: string;
+  percentOff: number;
+  price: number;
+}
+
+/**
+ * Read the checkout order summary. Pass rule, in code: the code read
+ * equals the code exactly AND the discount is within $0.02 of
+ * price × percent / 100 AND total < subtotal.
+ */
+export async function checkCheckout(
+  env: Env,
+  png: Uint8Array,
+  offer: CheckoutOffer,
+  client?: SparkClient,
+): Promise<CheckoutResult> {
+  const c = client ?? new SparkClient(env);
+  const out = await c.chatWithImages(CheckoutCheck, {
+    system:
+      "You are a careful auditor and object grounding expert. You read checkout order summaries exactly and ground each line with a bounding box. Reply JSON only.",
+    user: [
+      "Checkout screenshot above. Read the order summary: the discount code line, the discount amount, the subtotal, and the total.",
+      "Give one bounding box [x_min, y_min, x_max, y_max] on a 0–1000 grid with (0,0) top-left per line you found.",
+      'Label the boxes exactly: "Code applied" for the code line, the discount amount as read (for example "−$3.80") for the discount line, "Total" for the total.',
+      'Return JSON only: {"codeApplied": true, "codeRead": "<code as read>", "discountAmountRead": "<amount as read>", "subtotalRead": "<subtotal as read>", "totalRead": "<total as read>", "boxes": [{"label": "...", "box": [...]}], "pass": true}.',
+    ].join("\n"),
+    images: [png],
+    temperature: 0.1,
+  });
+  const d = out.data;
+  const discount = parseMoney(d.discountAmountRead);
+  const subtotal = parseMoney(d.subtotalRead);
+  const total = parseMoney(d.totalRead);
+  const expected = (offer.price * offer.percentOff) / 100;
+  const pass =
+    d.codeRead === offer.code &&
+    discount !== null &&
+    Math.abs(Math.abs(discount) - expected) <= 0.02 &&
+    subtotal !== null &&
+    total !== null &&
+    total < subtotal;
+  return {
+    codeApplied: d.codeApplied,
+    codeRead: d.codeRead,
+    discountAmountRead: d.discountAmountRead,
+    subtotalRead: d.subtotalRead,
+    totalRead: d.totalRead,
+    boxes: d.boxes,
+    pass,
+    tokens: out.tokensUsed,
+  };
+}
+
 /** Compare proposed product copy against the product's photo. */
 export async function checkCopyAgainstPhoto(
   env: Env,

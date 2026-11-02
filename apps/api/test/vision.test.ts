@@ -3,9 +3,12 @@ import type { VisionCheck as VisionCheckData } from "@museaiteam/shared";
 import type { Env } from "../src/bindings.js";
 import type { SparkClient } from "../src/spark.js";
 import {
+  checkCheckout,
   checkCopyAgainstPhoto,
   checkImageFacts,
+  checkProductPage,
   imageFactsPass,
+  parseMoney,
   type ImageFacts,
 } from "../src/vision.js";
 
@@ -201,5 +204,114 @@ describe("checkCopyAgainstPhoto", () => {
     );
     expect(out.consistent).toBe(true);
     expect(out.box).toBeUndefined();
+  });
+});
+
+describe("parseMoney", () => {
+  it("reads storefront amounts", () => {
+    expect(parseMoney("$3.80")).toBe(3.8);
+    expect(parseMoney("−$3.80")).toBe(-3.8);
+    expect(parseMoney("-$3.80")).toBe(-3.8);
+    expect(parseMoney("$1,234.56")).toBe(1234.56);
+    expect(parseMoney("")).toBeNull();
+    expect(parseMoney("Free")).toBeNull();
+  });
+});
+
+const OFFER = { code: "BREW20", percentOff: 20, price: 19 };
+
+function checkoutRead(over: Record<string, unknown> = {}) {
+  return {
+    codeApplied: true,
+    codeRead: "BREW20",
+    discountAmountRead: "−$3.80",
+    subtotalRead: "$19.00",
+    totalRead: "$15.20",
+    boxes: [
+      { label: "Code applied", box: [1, 2, 3, 4] },
+      { label: "−$3.80", box: [5, 6, 7, 8] },
+      { label: "Total", box: [9, 10, 11, 12] },
+    ],
+    pass: true,
+    ...over,
+  };
+}
+
+describe("checkCheckout", () => {
+  it("passes when the code, discount math, and total all check out", async () => {
+    const out = await checkCheckout(ENV, PNG, OFFER, fakeClient(checkoutRead()));
+    expect(out.pass).toBe(true);
+    expect(out.boxes.map((b) => b.label)).toEqual(["Code applied", "−$3.80", "Total"]);
+  });
+
+  it("fails on a wrong code", async () => {
+    const out = await checkCheckout(ENV, PNG, OFFER, fakeClient(checkoutRead({ codeRead: "BREW21" })));
+    expect(out.pass).toBe(false);
+  });
+
+  it("fails with no discount line", async () => {
+    const out = await checkCheckout(
+      ENV,
+      PNG,
+      OFFER,
+      fakeClient(
+        checkoutRead({
+          codeApplied: false,
+          codeRead: "",
+          discountAmountRead: "",
+          subtotalRead: "$19.00",
+          totalRead: "$19.00",
+          boxes: [],
+        }),
+      ),
+    );
+    expect(out.pass).toBe(false);
+  });
+
+  it("fails when the discount math is off", async () => {
+    const out = await checkCheckout(
+      ENV,
+      PNG,
+      OFFER,
+      fakeClient(checkoutRead({ discountAmountRead: "$1.00", totalRead: "$18.00" })),
+    );
+    expect(out.pass).toBe(false);
+  });
+
+  it("computes pass in code, not from the model", async () => {
+    const out = await checkCheckout(
+      ENV,
+      PNG,
+      OFFER,
+      fakeClient(checkoutRead({ codeRead: "WRONG", pass: true })),
+    );
+    expect(out.pass).toBe(false);
+  });
+});
+
+describe("checkProductPage", () => {
+  it("finds the new copy by its words", async () => {
+    const out = await checkProductPage(
+      ENV,
+      PNG,
+      "A light roast with floral notes.",
+      fakeClient({
+        found: true,
+        read: "A light roast with floral notes. Fresh for Black Friday.",
+        box: [1, 2, 3, 4],
+      }),
+    );
+    expect(out.found).toBe(true);
+    expect(out.box).toEqual([1, 2, 3, 4]);
+  });
+
+  it("rejects a found flag with mismatched words", async () => {
+    const out = await checkProductPage(
+      ENV,
+      PNG,
+      "A light roast with floral notes.",
+      fakeClient({ found: true, read: "An old dark roast description." }),
+    );
+    expect(out.found).toBe(false);
   });
 });
