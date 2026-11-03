@@ -41,7 +41,7 @@ describe("decideProposal", () => {
     expect(await decideProposal(env, "org1", "p1", "approve")).toBe("ok");
     expect(tables.proposals_out[0].status).toBe("held");
     expect(tables.runs).toHaveLength(0);
-    expect(tables.notifications.some((n) => n.kind === "proposal.started")).toBe(true);
+    expect(tables.notifications.some((n) => n.kind === "proposal.held")).toBe(true);
   });
 
   it("unknown and decided ideas report honestly", async () => {

@@ -151,6 +151,9 @@ export async function createGoal(
   if (g.teamId && !(await teamInOrg(env, orgId, g.teamId))) {
     throw new BadGoal("unknown team");
   }
+  if (g.voiceKey && !g.voiceKey.startsWith(`voice/${orgId}/`)) {
+    throw new BadGoal("foreign voice key");
+  }
   const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO goals (id, org_id, team_id, title, metric_name, metric_source,

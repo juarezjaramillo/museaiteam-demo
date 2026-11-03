@@ -8,6 +8,7 @@ import {
 } from "../src/approvals.js";
 import {
   addServer,
+  assertPublicHttpUrl,
   callTool,
   isBoxServer,
   parseBoxArgv,
@@ -124,6 +125,28 @@ describe("callTool", () => {
     const err = await callTool(e, server(), "get_status", {}).catch((x) => x);
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).code).toBe("tool");
+  });
+
+  it("meters the hire's calls into the run's fair-use total", async () => {
+    const tables = blankTables();
+    tables.runs.push({ id: "r1", org_id: "org1", tokens_used: 0 });
+    const e = env(tables);
+    stubRpc({
+      "tools/call": () => jsonRpc({ content: [{ type: "text", text: "0123456789" }] }),
+    });
+    await callTool(e, server(), "get_status", { a: "b" }, null, false, { runId: "r1" });
+    expect(tables.runs.find((r) => r.id === "r1")?.tokens_used).toBeGreaterThan(0);
+  });
+
+  it("failed calls meter nothing", async () => {
+    const tables = blankTables();
+    tables.runs.push({ id: "r1", org_id: "org1", tokens_used: 0 });
+    const e = env(tables);
+    stubRpc({ "tools/call": () => jsonRpc({ content: [{ text: "boom" }], isError: true }) });
+    await expect(
+      callTool(e, server(), "get_status", {}, null, false, { runId: "r1" }),
+    ).rejects.toThrow(McpError);
+    expect(tables.runs.find((r) => r.id === "r1")?.tokens_used).toBe(0);
   });
 });
 
@@ -376,4 +399,30 @@ describe("autoReviewRun with tool calls", () => {
     expect(by("r1")).toBe("approved");
     expect(by("w1")).toBe("pending");
   });
+});
+
+describe("assertPublicHttpUrl", () => {
+  it("keeps public https hosts", () => {
+    expect(() => assertPublicHttpUrl("https://mine.example/mcp")).not.toThrow();
+  });
+  const blocked = [
+    "ftp://mine.example/mcp",
+    "not a url",
+    "http://localhost/mcp",
+    "http://localhost.:8080/mcp",
+    "https://db.local/mcp",
+    "http://127.0.0.1/mcp",
+    "http://10.0.0.5/mcp",
+    "http://192.168.1.9/mcp",
+    "http://172.20.0.4/mcp",
+    "http://169.254.169.254/latest/meta-data",
+    "http://2130706433/mcp",
+    "http://[::1]/mcp",
+    "http://[fe80::1]/mcp",
+  ];
+  for (const url of blocked) {
+    it(`blocks ${url}`, () => {
+      expect(() => assertPublicHttpUrl(url)).toThrow(McpError);
+    });
+  }
 });

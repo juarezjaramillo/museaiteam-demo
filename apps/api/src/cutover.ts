@@ -134,7 +134,10 @@ export async function retireOrgLinkIfDone(env: Env, orgId: string, tool: string)
     .bind(orgId, tool)
     .all<{ seat_id: string; status: string }>();
   const rows = wanters.results ?? [];
-  if (rows.length > 0 && rows.some((r) => r.status !== "verified")) return "kept";
+  // No provisions is not proof of no use: runs borrow the org fallback
+  // with no provision row at all. Only the founder disconnects those.
+  if (rows.length === 0) return "kept";
+  if (rows.some((r) => r.status !== "verified")) return "kept";
   await env.DB.prepare("DELETE FROM oauth_tokens WHERE org_id = ? AND provider = ?")
     .bind(orgId, tool)
     .run();
@@ -142,7 +145,7 @@ export async function retireOrgLinkIfDone(env: Env, orgId: string, tool: string)
   await notify(env, orgId, {
     kind: "seat.verified",
     title: `Org ${tool} link retired — hires use their own`,
-    body: rows.length === 0 ? "Nobody used it." : "Every hire verified its own seat.",
+    body: "Every hire verified its own seat.",
   });
   return "retired";
 }

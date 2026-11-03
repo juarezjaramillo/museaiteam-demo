@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/bindings.js";
 import {
   askForSeats,
   decideSeatRequest,
   grantSeats,
+  inviteUrlFor,
   keystoneVerified,
+  loadAdminGrant,
+  saveAdminGrant,
   normalizeTools,
   requestSeats,
   seatAskLines,
@@ -84,7 +87,7 @@ describe("provisioning", () => {
     // Invite arrives: wake, browse, wait on the account.
     tables.seat_mail.push({
       id: "m1", seat_id: "s1", message_id: "mm1", from_addr: "n@linear",
-      subject: "invited", body: "join https://linear.test/invite/abc ok",
+      subject: "invited", body: "join https://linear.app/invite/abc ok",
       read_at: null, created_at: "",
     });
     expect(await tickProvisions(e)).toBe(1);
@@ -107,7 +110,7 @@ describe("provisioning", () => {
     tables.orgs.push({ id: "org1", box_max_concurrent: 3 });
     tables.seat_mail.push({
       id: "m1", seat_id: "s1", message_id: "mm1", from_addr: "n@x",
-      subject: "invited", body: "join https://x.test/i ok",
+      subject: "invited", body: "join https://linear.app/i ok",
       read_at: null, created_at: "",
     });
     tables.seat_provisions.push({ seat_id: "s1", tool: "linear", step: "invite", status: "pending", detail: "", attempts: 0 });
@@ -123,13 +126,36 @@ describe("provisioning", () => {
     expect(tables.notifications.some((n) => n.kind === "provision.failed")).toBe(true);
   });
 
-  it("verifies token-backed tools and keystones", async () => {
+  it("verifies tokens with a vendor read call", async () => {
     const { env: e } = env();
-    await setSeatCredential(e, "org1", "s1", { tool: "github", kind: "token", secret: "x" });
-    expect(await verifySeatTool(e, "org1", "s1", "github")).toBe(true);
-    expect(await verifySeatTool(e, "org1", "s1", "linear")).toBe(false);
-    expect(await keystoneVerified(e, "s1", "engineer")).toBe(true);
-    expect(await keystoneVerified(e, "s1", "pm")).toBe(false);
+    vi.stubGlobal(
+      "fetch",
+      async (url: string) =>
+        String(url).includes("api.github.com")
+          ? Response.json({ login: "hire" })
+          : new Response("no", { status: 401 }),
+    );
+    try {
+      await setSeatCredential(e, "org1", "s1", { tool: "github", kind: "token", secret: "x" });
+      expect(await verifySeatTool(e, "org1", "s1", "github")).toBe(true);
+      expect(await verifySeatTool(e, "org1", "s1", "linear")).toBe(false);
+      expect(await keystoneVerified(e, "s1", "engineer")).toBe(true);
+      expect(await keystoneVerified(e, "s1", "pm")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("leaves the seat unverified when the vendor rejects the token", async () => {
+    const { env: e, tables } = env();
+    vi.stubGlobal("fetch", async () => new Response("no", { status: 401 }));
+    try {
+      await setSeatCredential(e, "org1", "s1", { tool: "github", kind: "token", secret: "bad" });
+      expect(await verifySeatTool(e, "org1", "s1", "github")).toBe(false);
+      expect(tables.seat_provisions.some((r) => r.status === "verified")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("maps servers to provisionable tools", () => {
@@ -193,5 +219,89 @@ describe("provisioning", () => {
     const note = tables.notifications.find((n) => n.kind === "seat.requested" && String(n.title).includes("denied"));
     expect(note).toBeTruthy();
     expect(String(note?.body)).toMatch(/GitHub/);
+  });
+});
+
+describe("tickProvisions", () => {
+  it("leaves waiting rows for their human or external event", async () => {
+    const { env: e, tables } = env();
+    tables.seat_provisions.push({
+      seat_id: "s1", tool: "github", step: "invite",
+      status: "waiting", detail: "needs the GitHub admin grant in Setup", attempts: 0,
+    });
+    expect(await tickProvisions(e)).toBe(0);
+    expect(tables.seat_provisions[0].status).toBe("waiting");
+  });
+});
+
+describe("inviteUrlFor", () => {
+  it("picks the tool's own invite out of a mixed inbox", () => {
+    const mail = [
+      { subject: "joined", body: "see https://github.com/orgs/x/invitation" },
+      { subject: "invited", body: "join https://linear.app/invite/abc ok" },
+    ];
+    expect(inviteUrlFor("linear", mail)).toBe("https://linear.app/invite/abc");
+    expect(inviteUrlFor("github", mail)).toBe("https://github.com/orgs/x/invitation");
+  });
+  it("refuses a phishing link for a known tool", () => {
+    const mail = [{ subject: "invited", body: "join https://linear.app.evil.test/i ok" }];
+    expect(inviteUrlFor("linear", mail)).toBe(null);
+  });
+  it("keeps first-URL behavior for tools without a known host", () => {
+    const mail = [{ subject: "invited", body: "join https://x.test/i ok" }];
+    expect(inviteUrlFor("some-future-tool", mail)).toBe("https://x.test/i");
+  });
+});
+
+describe("askForSeats concurrency", () => {
+  it("concurrent asks file exactly one card", async () => {
+    const { env: e, tables } = env();
+    const [a, b] = await Promise.all([
+      askForSeats(e, "org1", "s1", ["figma"], "need it"),
+      askForSeats(e, "org1", "s1", ["notion"], "need it too"),
+    ]);
+    expect(tables.seat_requests).toHaveLength(1);
+    expect(a.requestId).toBe(b.requestId);
+    const tools = JSON.parse(tables.seat_requests[0].tools_json as string) as string[];
+    expect([...tools].sort()).toEqual(["figma", "notion"]);
+  });
+});
+
+describe("corrupt ask cards", () => {
+  it("deciding a corrupt card denies it instead of throwing", async () => {
+    const { env: e, tables } = env();
+    tables.seat_requests.push({
+      id: "r1", org_id: "org1", seat_id: "s1",
+      tools_json: "nope{", status: "proposed", created_at: "",
+    });
+    expect(await decideSeatRequest(e, "org1", "r1", "u1", true)).toBe("ok");
+    expect(tables.seat_requests[0].status).toBe("denied");
+  });
+  it("reading a corrupt card returns no tools instead of throwing", async () => {
+    const { env: e, tables } = env();
+    tables.seat_requests.push({
+      id: "r1", org_id: "org1", seat_id: "s1",
+      tools_json: "nope{", status: "proposed", created_at: "",
+    });
+    const req = await requestSeats(e, "org1", "s1");
+    expect(req.tools).toEqual([]);
+  });
+});
+
+describe("saveAdminGrant", () => {
+  it("stores a bounded grant and reads it back", async () => {
+    const { env: e, tables } = env();
+    await saveAdminGrant(e, "org1", "github", ["repo"], "s3cret");
+    expect(tables.tool_admin_grants).toHaveLength(1);
+    expect(await loadAdminGrant(e, "org1", "github")).toBe("s3cret");
+  });
+  it("rejects unbounded inputs", async () => {
+    const { env: e } = env();
+    await expect(saveAdminGrant(e, "org1", "t".repeat(121), [], "s")).rejects.toThrow();
+    await expect(saveAdminGrant(e, "org1", "github", [], "s".repeat(4001))).rejects.toThrow();
+    await expect(saveAdminGrant(e, "org1", "github", ["s".repeat(121)], "s")).rejects.toThrow();
+    await expect(
+      saveAdminGrant(e, "org1", "github", "nope" as unknown as string[], "s"),
+    ).rejects.toThrow();
   });
 });

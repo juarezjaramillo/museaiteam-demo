@@ -1,9 +1,11 @@
+import { providerFetch } from "./http.js";
+
 async function gh(
   token: string,
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
-  const res = await fetch(`https://api.github.com${path}`, {
+  const res = await providerFetch("GitHub", `https://api.github.com${path}`, {
     ...init,
     headers: {
       accept: "application/vnd.github+json",
@@ -106,6 +108,19 @@ export async function searchPrCount(
   return json.total_count ?? 0;
 }
 
+/** Repos the token can see, newest first, forks skipped. Capped for gathering. */
+export async function listRepos(token: string): Promise<string[]> {
+  const res = await gh(token, "/user/repos?per_page=5&sort=updated");
+  const json = (await res.json()) as Array<{
+    full_name?: string;
+    fork?: boolean;
+  }>;
+  return (json ?? [])
+    .filter((r) => r.full_name && !r.fork)
+    .slice(0, 3)
+    .map((r) => r.full_name as string);
+}
+
 /** Repo context for the engineer: capped recursive tree + file reads. */
 export async function readTree(token: string, repo: string): Promise<string[]> {
   const info = (await (
@@ -129,7 +144,8 @@ export async function readFile(
   repo: string,
   path: string,
 ): Promise<string | null> {
-  const res = await fetch(
+  const res = await providerFetch(
+    "GitHub",
     `https://api.github.com/repos/${repo}/contents/${path}`,
     {
       headers: {

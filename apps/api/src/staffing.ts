@@ -38,7 +38,8 @@ export class RunThrottled extends Error {
 
 // Queued runs are waiters, not holders: only started runs lock their squad.
 // (Counting queued here let a queued run block itself forever.)
-const ACTIVE_STATUSES = ["open", "debating", "acting", "awaiting_approval"];
+// Ruled runs are mid-flight — debate done, squad still held.
+const ACTIVE_STATUSES = ["open", "debating", "ruled", "acting", "awaiting_approval"];
 
 /** Roles currently debating/acting in the org. Kill-flagged runs are
  *  already dead, so their squads are free immediately. */
@@ -160,6 +161,7 @@ export async function createWorkRun(
   input: NewRunInput,
 ): Promise<{ runId: string; status: "open" | "queued"; squad: SeatRole[] }> {
   let teamId = input.teamId ?? null;
+  let goalBrief: string | null = null;
   if (input.goalId) {
     const goal = await getGoal(env, input.orgId, input.goalId);
     if (!goal) throw new RunConflict("unknown goal", 404);
@@ -167,6 +169,7 @@ export async function createWorkRun(
       throw new RunConflict(`goal is ${goal.status}`, 409);
     }
     teamId = goal.team_id ?? teamId;
+    goalBrief = goal.brief_note;
   }
   if (input.teamId && teamId && input.teamId !== teamId) {
     throw new RunConflict("team does not match goal team", 400);
@@ -200,10 +203,14 @@ export async function createWorkRun(
   const queued = !(await squadFree(env, input.orgId, squad));
   const runId = crypto.randomUUID();
   // The morning brief rides along: an explicit note wins, otherwise
-  // today's team brief becomes the session's context. Empty briefs
-  // feed nothing, so unbriefed teams behave exactly as before.
+  // the goal's own brief leads and today's team brief follows. Empty
+  // briefs feed nothing, so unbriefed teams behave exactly as before.
   const briefNote =
-    input.briefNote ?? (await todayBriefText(env, input.orgId, teamId));
+    input.briefNote ??
+    [goalBrief, await todayBriefText(env, input.orgId, teamId)]
+      .map((s) => (s ?? "").trim())
+      .filter(Boolean)
+      .join("\n\n");
   await env.DB.prepare(
     `INSERT INTO runs (id, org_id, team_id, goal_id, kind, parent_run_id, goal,
       metric_name, metric_baseline, metric_target, timebox_days,
@@ -241,7 +248,19 @@ export async function createWorkRun(
     });
   }
   if (!queued) {
-    await env.GOAL_RUN.create({ params: { runId } });
+    try {
+      await env.GOAL_RUN.create({ params: { runId } });
+    } catch (err) {
+      // Created but never started: back to queued so the promoter
+      // retries instead of stranding an open run with no instance.
+      await env.DB.prepare("UPDATE runs SET status = 'queued' WHERE id = ?")
+        .bind(runId)
+        .run();
+      await audit(env, runId, "workflow", "run.promote_failed", {
+        error: String(err).slice(0, 200),
+      });
+      return { runId, status: "queued", squad };
+    }
   }
   return { runId, status: queued ? "queued" : "open", squad };
 }
@@ -502,7 +521,25 @@ export async function promoteQueued(env: Env): Promise<void> {
         .bind(row.id)
         .run();
       if ((claimed.meta.changes ?? 0) !== 1) continue;
-      await env.GOAL_RUN.create({ params: { runId: row.id } });
+      try {
+        await env.GOAL_RUN.create({ params: { runId: row.id } });
+      } catch (err) {
+        // Claimed but never started: release the claim so the next
+        // tick retries instead of stranding an open run.
+        await env.DB.prepare(
+          "UPDATE runs SET status = 'queued' WHERE id = ? AND status = 'open'",
+        )
+          .bind(row.id)
+          .run();
+        try {
+          await audit(env, row.id, "workflow", "run.promote_failed", {
+            error: String(err).slice(0, 200),
+          });
+        } catch {
+          /* audit itself failed; nothing left to do */
+        }
+        continue;
+      }
       await audit(env, row.id, "workflow", "run.promoted", {});
     } catch (err) {
       try {

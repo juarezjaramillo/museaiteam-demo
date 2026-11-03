@@ -1,3 +1,5 @@
+import { providerFetch } from "./http.js";
+
 const NOTION_VERSION = "2022-06-28";
 
 async function nq(
@@ -5,7 +7,7 @@ async function nq(
   path: string,
   init?: RequestInit,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`https://api.notion.com${path}`, {
+  const res = await providerFetch("Notion", `https://api.notion.com${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
@@ -23,6 +25,66 @@ async function nq(
     );
   }
   return json;
+}
+
+export interface NotionPage {
+  id: string;
+  title: string;
+  lastEdited: string;
+}
+
+/** Recently edited pages for the memory bank, newest first. */
+export async function searchPages(token: string, limit = 20): Promise<NotionPage[]> {
+  const json = await nq(token, "/v1/search", {
+    method: "POST",
+    body: JSON.stringify({
+      filter: { property: "object", value: "page" },
+      sort: { direction: "descending", timestamp: "last_edited_time" },
+      page_size: Math.min(Math.max(limit, 1), 25),
+    }),
+  });
+  const results =
+    (json.results as
+      | Array<{
+          id: string;
+          last_edited_time?: string;
+          properties?: Record<string, { title?: Array<{ plain_text?: string }> }>;
+        }>
+      | undefined) ?? [];
+  return results.map((p) => {
+    let title = "(untitled)";
+    for (const prop of Object.values(p.properties ?? {})) {
+      const t = prop.title?.[0]?.plain_text;
+      if (t) {
+        title = t;
+        break;
+      }
+    }
+    return {
+      id: String(p.id ?? ""),
+      title: title.slice(0, 140),
+      lastEdited: String(p.last_edited_time ?? ""),
+    };
+  });
+}
+
+/** Plain text of a page's blocks, capped for embedding. */
+export async function readPageText(token: string, pageId: string): Promise<string> {
+  const json = await nq(token, `/v1/blocks/${pageId}/children?page_size=50`, {});
+  const results = (json.results as Array<Record<string, unknown>> | undefined) ?? [];
+  const lines: string[] = [];
+  for (const b of results) {
+    const type = b.type as string | undefined;
+    if (!type) continue;
+    const inner = b[type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
+    const text = (inner?.rich_text ?? [])
+      .map((r) => r.plain_text ?? "")
+      .join("")
+      .trim();
+    if (text) lines.push(text.slice(0, 2000));
+    if (lines.join("\n").length > 8000) break;
+  }
+  return lines.join("\n").slice(0, 8000);
 }
 
 export interface DecisionPage {

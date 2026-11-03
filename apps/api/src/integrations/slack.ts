@@ -1,9 +1,11 @@
+import { ProviderRateLimited, providerFetch, retryAfterSec } from "./http.js";
+
 async function api(
   token: string,
   method: string,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`https://slack.com/api/${method}`, {
+  const res = await providerFetch("Slack", `https://slack.com/api/${method}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
@@ -15,6 +17,9 @@ async function api(
     string,
     unknown
   >;
+  if (json.error === "ratelimited") {
+    throw new ProviderRateLimited("Slack", retryAfterSec(res.headers));
+  }
   if (!json.ok) {
     throw new Error(`Slack ${method}: ${json.error ?? "unknown"}`);
   }
@@ -42,6 +47,46 @@ export async function findChannelId(
     if (!cursor) return null;
   }
   return null;
+}
+
+export interface SlackChannel {
+  id: string;
+  name: string;
+}
+
+/** Public channels for the memory bank; DMs and private rooms stay out. */
+export async function listChannels(token: string): Promise<SlackChannel[]> {
+  const json = (await api(token, "conversations.list", {
+    types: "public_channel",
+    limit: 100,
+  })) as { channels?: Array<{ id: string; name: string; is_archived?: boolean }> };
+  return (json.channels ?? [])
+    .filter((c) => !c.is_archived)
+    .slice(0, 10)
+    .map((c) => ({ id: c.id, name: c.name }));
+}
+
+export interface SlackMessage {
+  text: string;
+  ts: string;
+}
+
+/** Recent human+bot messages in a channel, joins/leaves excluded. */
+export async function channelHistory(
+  token: string,
+  channel: string,
+  oldest: string,
+  limit = 30,
+): Promise<SlackMessage[]> {
+  const json = (await api(token, "conversations.history", {
+    channel,
+    oldest,
+    limit: Math.min(Math.max(limit, 1), 50),
+  })) as { messages?: Array<{ text?: string; ts?: string; subtype?: string }> };
+  return (json.messages ?? [])
+    .filter((m) => (!m.subtype || m.subtype === "bot_message") && m.text && m.ts)
+    .map((m) => ({ text: String(m.text).slice(0, 1000), ts: String(m.ts) }))
+    .slice(0, 50);
 }
 
 /** Metric pull: human+bot messages since ts; joins/leaves excluded. */

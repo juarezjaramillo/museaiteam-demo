@@ -24,6 +24,15 @@ interface ActionRow {
   revert_payload: string | null;
 }
 
+export class RunNotTerminal extends Error {
+  constructor(status: string) {
+    super(`session is ${status} — finish or stop it before undoing`);
+  }
+}
+
+/** Undoing a finished session only: live runs keep acting into reverted state. */
+export const TERMINAL_RUN_STATUSES = ["done", "failed", "halted"];
+
 /**
  * True when the same run created the Linear issue. A manage action on a
  * pre-existing issue must never delete the parent — only what the run
@@ -59,9 +68,14 @@ export async function executeRevert(
   env: Env,
   orgId: string,
   runId: string,
+  opts?: { requireTerminal?: boolean },
 ): Promise<{ reverted: string[]; failed: Array<{ id: string; error: string }> }> {
   // Reverts run as the author's seat: same identity that made the mess.
-  const teamId = (await getRun(env, runId))?.team_id ?? null;
+  const run = await getRun(env, runId);
+  const teamId = run?.team_id ?? null;
+  if (opts?.requireTerminal && run && !TERMINAL_RUN_STATUSES.includes(run.status)) {
+    throw new RunNotTerminal(run.status);
+  }
   const rows = await env.DB.prepare(
     "SELECT id, kind, target, revert_payload FROM actions WHERE run_id = ? AND status = 'done' ORDER BY rowid DESC",
   )
@@ -175,10 +189,19 @@ export async function executeRevert(
             .bind(now, String(t))
             .run();
         }
+        // The tokens (the public surface) are already revoked; a missing
+        // Slack connection must not fail the undo, just leave the post.
         if (rp.slackChannel && rp.slackTs) {
-          const token = await hireToken(env, orgId, teamId, "slack");
-          if (!token) throw new Error("slack not connected");
-          await deleteMessage(token, String(rp.slackChannel), String(rp.slackTs));
+          try {
+            const token = await hireToken(env, orgId, teamId, "slack");
+            if (!token) throw new Error("slack not connected");
+            await deleteMessage(token, String(rp.slackChannel), String(rp.slackTs));
+          } catch (err) {
+            await audit(env, runId, "human", "revert.delivery_kept", {
+              action: row.id,
+              error: String(err).slice(0, 200),
+            });
+          }
         }
       } else if (row.kind === "notion.create_page") {
         const token = await hireToken(env, orgId, teamId, "notion");

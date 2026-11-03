@@ -39,7 +39,6 @@ import {
   hasSecret,
   listServers,
   removeServer,
-  setCap,
   setSecret,
   setTrust,
 } from "./mcp.js";
@@ -69,6 +68,7 @@ import { fireSeat, sweepFrozenSeats } from "./offboard.js";
 import {
   decideSeatRequest,
   grantSeats,
+  parseToolList,
   requestSeats,
   setSeatMap,
   seatMapFor,
@@ -100,7 +100,7 @@ import {
   tickTicketThemes,
   updatePlaybookEntry,
 } from "./learning.js";
-import { executeRevert } from "./revert.js";
+import { RunNotTerminal, executeRevert } from "./revert.js";
 import {
   ProviderNotConfigured,
   callbackUrl,
@@ -131,6 +131,15 @@ import {
   recordMetricPoint,
   updateGoal,
 } from "./goals.js";
+import {
+  getProfile,
+  gatherNewConnection,
+  saveProfile,
+  tickMemoryGather,
+  type GatherSource,
+} from "./gather.js";
+import { parseStringList } from "./guards.js";
+import { assertPublicHttpUrl } from "./integrations/http.js";
 import { tickGoals, tickStalled } from "./checks.js";
 import { decideProposal, listProposals, tickProposals } from "./proposals.js";
 import { ideaBudget } from "./allowance.js";
@@ -599,10 +608,11 @@ app.post(
     }
     const gate = await trialGate(c.env, orgId);
     if (!gate.allowed) return c.json(trialExpiredBody(gate.status, await rosterSeats(c.env, orgId)), 403);
+    // Goal-less runs get a one-shot wrapper goal: every run belongs
+    // somewhere, and the dashboard has a single shape to render.
+    let goalId = body.goalId ?? null;
+    let wrapperGoalId: string | null = null;
     try {
-      // Goal-less runs get a one-shot wrapper goal: every run belongs
-      // somewhere, and the dashboard has a single shape to render.
-      let goalId = body.goalId ?? null;
       if (!goalId) {
         goalId = await createGoal(c.env, orgId, {
           teamId: body.teamId,
@@ -611,6 +621,7 @@ app.post(
           metricBaseline: body.metricBaseline,
           metricTarget: body.metricTarget,
         });
+        wrapperGoalId = goalId;
       }
       const created = await createWorkRun(c.env, {
         orgId,
@@ -628,6 +639,17 @@ app.post(
       });
       return c.json({ runId: created.runId, status: created.status }, 201);
     } catch (err) {
+      if (wrapperGoalId) {
+        // Creation failed after the wrapper existed: remove it rather
+        // than littering the goals list — but only when no run claimed it.
+        await c.env.DB.prepare(
+          `DELETE FROM goals WHERE id = ?
+           AND NOT EXISTS (SELECT 1 FROM runs WHERE goal_id = goals.id)`,
+        )
+          .bind(wrapperGoalId)
+          .run()
+          .catch(() => {});
+      }
       if (err instanceof RunThrottled) {
         return c.json(
           {
@@ -684,8 +706,13 @@ app.post("/api/runs/:id/revert", async (c) => {
   const access = await runRole(c, run, ...OWNERS);
   if (access !== "ok") return c.json({ error: access === "notfound" ? "not found" : "forbidden" }, access === "notfound" ? 404 : 403);
   await audit(c.env, id, "human", "revert.requested");
-  const result = await executeRevert(c.env, run.org_id, id);
-  return c.json({ ok: result.failed.length === 0, ...result });
+  try {
+    const result = await executeRevert(c.env, run.org_id, id, { requireTerminal: true });
+    return c.json({ ok: result.failed.length === 0, ...result });
+  } catch (err) {
+    if (err instanceof RunNotTerminal) return c.json({ error: String(err).slice(0, 160) }, 409);
+    throw err;
+  }
 });
 
 app.post("/api/runs/:id/baseline", async (c) => {
@@ -787,7 +814,7 @@ app.get("/api/runs/:id/detail", async (c) => {
 const GUARD_WORKERS = ["manager", ...SEAT_ROLES];
 // Demo defaults are wide open; spend_cap_cents 0 means unlimited.
 const OPEN_GUARDS = {
-  systems: ["github", "linear", "slack", "shopify", "hubspot", "notion"],
+  systems: ["github", "linear", "slack", "shopify", "hubspot", "notion", "creative"],
   write_scope: [
     "pr",
     "code",
@@ -805,6 +832,7 @@ const OPEN_GUARDS = {
     "followup",
     "page",
     "db",
+    "image",
   ],
   spend_cap_cents: 0,
   escalate_on: [] as string[],
@@ -831,10 +859,10 @@ app.get("/api/orgs/:org/guardrails", async (c) => {
       if (!row) return { worker_role: worker, ...OPEN_GUARDS, configured: false };
       return {
         worker_role: worker,
-        systems: JSON.parse(row.systems),
-        write_scope: JSON.parse(row.write_scope),
+        systems: parseStringList(row.systems) ?? [],
+        write_scope: parseStringList(row.write_scope) ?? [],
         spend_cap_cents: row.spend_cap_cents,
-        escalate_on: JSON.parse(row.escalate_on),
+        escalate_on: parseStringList(row.escalate_on) ?? [],
         configured: true,
       };
     }),
@@ -995,7 +1023,9 @@ app.post("/api/slack/events", async (c) => {
   }
   if (body.type === "event_callback" && body.event && body.team_id && body.event_id) {
     c.executionCtx.waitUntil(
-      handleSlackEvent(c.env, body.team_id, body.event_id, body.event).catch(() => {}),
+      handleSlackEvent(c.env, body.team_id, body.event_id, body.event).catch((err) => {
+        console.error("slack.event_failed", body.event_id, String(err).slice(0, 200));
+      }),
     );
   }
   return c.json({ ok: true });
@@ -1059,6 +1089,9 @@ app.get("/api/auth/:provider/callback", async (c) => {
       provider,
       grantedScope: grantedScope ?? "unknown",
     });
+    c.executionCtx.waitUntil(
+      gatherNewConnection(c.env, org, provider as GatherSource).catch(() => {}),
+    );
     return c.redirect(
       `${c.env.APP_URL}/?connected=${provider}&org=${encodeURIComponent(org)}`,
       302,
@@ -1073,7 +1106,7 @@ app.get("/api/orgs/:org", async (c) => {
   if (!org) return c.json({ error: "forbidden" }, 403);
   const row = await c.env.DB.prepare(
     `SELECT id, name, trial_started_at, trial_ends_at, grace_used, subscribed,
-       idea_allowance_words, proposal_grace_hours, box_max_concurrent
+       idea_allowance_words, proposal_grace_hours, box_max_concurrent, website_url
      FROM orgs WHERE id = ?`,
   )
     .bind(org)
@@ -1087,6 +1120,7 @@ app.get("/api/orgs/:org", async (c) => {
       idea_allowance_words: number;
       proposal_grace_hours: number;
       box_max_concurrent: number;
+      website_url: string;
     }>();
   if (!row) return c.json({ error: "not found" }, 404);
   // Pure read: only run/baseline attempts may grant grace, never a banner fetch.
@@ -1099,6 +1133,7 @@ app.get("/api/orgs/:org", async (c) => {
       graceHours: row.proposal_grace_hours,
     },
     boxMaxConcurrent: row.box_max_concurrent,
+    websiteUrl: row.website_url ?? "",
   });
 });
 
@@ -1110,6 +1145,7 @@ app.put(
       idea_allowance_words: z.number().int().min(0).max(10000000).optional(),
       proposal_grace_hours: z.number().int().min(24).max(168).optional(),
       box_max_concurrent: z.number().int().min(1).max(10).optional(),
+      website_url: z.string().max(500).optional(),
     }),
   ),
   async (c) => {
@@ -1131,10 +1167,51 @@ app.put(
         .bind(b.box_max_concurrent, org)
         .run();
     }
+    if (b.website_url !== undefined) {
+      const url = b.website_url.trim();
+      if (url) {
+        try {
+          assertPublicHttpUrl(url);
+        } catch {
+          return c.json({ error: "website must be a public http(s) URL" }, 400);
+        }
+      }
+      await c.env.DB.prepare("UPDATE orgs SET website_url = ? WHERE id = ?")
+        .bind(url, org)
+        .run();
+      if (url) c.executionCtx.waitUntil(gatherNewConnection(c.env, org, "website"));
+    }
     await audit(c.env, null, "human", "org.settings_updated", { org });
     return c.json({ ok: true });
   },
 );
+
+app.get("/api/orgs/:org/profile", async (c) => {
+  const org = await roleOrg(c, ...EVERYONE);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  return c.json({ profile: await getProfile(c.env, org) });
+});
+
+const PROFILE_PATCH = z.object({
+  icp: z.string().max(2000).optional(),
+  offering: z.string().max(2000).optional(),
+  customer_count: z.string().max(200).optional(),
+  employee_count: z.string().max(200).optional(),
+  help_center: z.string().max(2000).optional(),
+  pricing: z.string().max(2000).optional(),
+  tone: z.string().max(2000).optional(),
+  competitors: z.string().max(2000).optional(),
+  complaint_themes: z.string().max(2000).optional(),
+  tools: z.string().max(2000).optional(),
+});
+
+app.put("/api/orgs/:org/profile", zValidator("json", PROFILE_PATCH), async (c) => {
+  const org = await roleOrg(c, ...DECIDERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const profile = await saveProfile(c.env, org, c.req.valid("json"), "human");
+  await audit(c.env, null, "human", "profile.updated", { org });
+  return c.json({ profile });
+});
 
 app.get("/api/orgs/:org/connections", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
@@ -1153,6 +1230,20 @@ app.get("/api/orgs/:org/connections", async (c) => {
   return c.json({ status, cutOver: cut.cutOver, retiring });
 });
 
+app.delete("/api/orgs/:org/providers/:provider", async (c) => {
+  const org = await roleOrg(c, ...OWNERS);
+  if (!org) return c.json({ error: "forbidden" }, 403);
+  const provider = c.req.param("provider");
+  if (!isProvider(provider)) return c.json({ error: "unknown provider" }, 400);
+  // Explicit founder action: the only way to remove a link nobody
+  // provisioned (auto-retire never touches those — runs may borrow them).
+  const deleted = await c.env.DB.prepare("DELETE FROM oauth_tokens WHERE org_id = ? AND provider = ?")
+    .bind(org, provider)
+    .run();
+  await audit(c.env, null, "human", "integration.disconnected", { org, provider });
+  return c.json({ ok: true, deleted: (deleted.meta.changes ?? 0) > 0 });
+});
+
 /** Tool servers: the registry plus the shipped catalog. Secrets never read back. */
 app.get("/api/orgs/:org/mcp", async (c) => {
   const org = await roleOrg(c, ...EVERYONE);
@@ -1167,7 +1258,6 @@ app.get("/api/orgs/:org/mcp", async (c) => {
       authName: s.auth_name,
       source: s.source,
       status: s.status,
-      spendCapCents: s.spend_cap_cents,
       hasSecret: s.auth === "none" ? true : await hasSecret(c.env, org, s.id),
     })),
   );
@@ -1257,17 +1347,6 @@ app.put(
   },
 );
 
-app.put(
-  "/api/orgs/:org/mcp/:id/cap",
-  zValidator("json", z.object({ cents: z.number().int().min(0).max(100_000_00) })),
-  async (c) => {
-    const org = await roleOrg(c, ...OWNERS);
-    if (!org) return c.json({ error: "forbidden" }, 403);
-    const ok = await setCap(c.env, org, c.req.param("id"), c.req.valid("json").cents);
-    if (!ok) return c.json({ error: "not found" }, 404);
-    return c.json({ ok: true });
-  },
-);
 
 app.post(
   "/api/orgs/:org/mcp/:id/trust",
@@ -1401,8 +1480,8 @@ app.get("/api/orgs/:org/seat-requests", async (c) => {
       seatId: r.seat_id,
       role: r.role,
       email: r.email,
-      tools: JSON.parse(r.tools_json) as string[],
-      paid: paidTools(JSON.parse(r.tools_json) as string[]),
+      tools: parseToolList(r.tools_json),
+      paid: paidTools(parseToolList(r.tools_json)),
       status: r.status,
       createdAt: r.created_at,
     })),
@@ -1838,7 +1917,11 @@ app.put(
       });
       return c.json(await getBrief(c.env, org, c.req.param("teamId"), undefined, scope));
     } catch (err) {
-      if (err instanceof BadRole) return c.json({ error: "unknown team" }, 404);
+      if (err instanceof BadRole) {
+        return err.message === "unknown team"
+          ? c.json({ error: "unknown team" }, 404)
+          : c.json({ error: String(err).slice(0, 160) }, 400);
+      }
       throw err;
     }
   },
@@ -2278,7 +2361,7 @@ app.get("/api/orgs/:org/hires", async (c) => {
     shape[r] = { runs: 0, proposals: 0, votes: 0, shipped: 0, up: 0, down: 0, tokens: 0 };
   }
   const runs = await c.env.DB.prepare(
-    "SELECT id, lineup, tokens_used FROM runs WHERE org_id = ?",
+    "SELECT id, lineup, tokens_used FROM runs WHERE org_id = ? ORDER BY rowid DESC LIMIT 5000",
   )
     .bind(org)
     .all<{ id: string; lineup: string; tokens_used: number }>();
@@ -2317,7 +2400,8 @@ app.get("/api/orgs/:org/hires", async (c) => {
   }
   const actions = await c.env.DB.prepare(
     `SELECT a.kind AS kind FROM actions a JOIN runs r ON r.id = a.run_id
-     WHERE r.org_id = ? AND a.status = 'done' AND a.target NOT LIKE 'closeout%'`,
+     WHERE r.org_id = ? AND a.status = 'done' AND a.target NOT LIKE 'closeout%'
+     ORDER BY a.rowid DESC LIMIT 20000`,
   )
     .bind(org)
     .all<{ kind: string }>();
@@ -2328,7 +2412,7 @@ app.get("/api/orgs/:org/hires", async (c) => {
   const ratings = await c.env.DB.prepare(
     `SELECT a.kind AS kind, r.thumb AS thumb FROM ratings r
      JOIN actions a ON a.id = r.action_id JOIN runs ru ON ru.id = r.run_id
-     WHERE ru.org_id = ?`,
+     WHERE ru.org_id = ? ORDER BY r.rowid DESC LIMIT 20000`,
   )
     .bind(org)
     .all<{ kind: string; thumb: string }>();
@@ -2478,6 +2562,7 @@ export default {
     ctx.waitUntil(guardTick(env, "ticketThemes", () => tickTicketThemes(env)));
     ctx.waitUntil(guardTick(env, "errorWatch", () => tickErrorWatch(env)));
     ctx.waitUntil(guardTick(env, "provisions", () => tickProvisions(env)));
+    ctx.waitUntil(guardTick(env, "memoryGather", () => tickMemoryGather(env)));
     ctx.waitUntil(guardTick(env, "boxReconcile", () => reconcileBoxes(env)));
     ctx.waitUntil(guardTick(env, "seatNudge", () => nudgeSeatRequests(env)));
     ctx.waitUntil(guardTick(env, "sweepFrozen", () => sweepFrozenSeats(env)));

@@ -66,6 +66,20 @@ export async function checkLiveness(
   return { liveness: "alive", run };
 }
 
+/**
+ * Meter LLM spend on a run. touchRun is additive, so this passes the
+ * delta straight through — never the running total (that doubles it).
+ */
+export async function addRunTokens(env: Env, runId: string, n: number): Promise<void> {
+  if (!n) return;
+  await touchRun(env, runId, { tokens_used: n });
+}
+
+/** The goal text the crew actually sees: the goal plus the founder brief. */
+export function goalWithBrief(goal: string, briefNote: string): string {
+  return briefNote ? `${goal}\n\nFounder brief: ${briefNote}` : goal;
+}
+
 export async function touchRun(
   env: Env,
   runId: string,

@@ -36,20 +36,29 @@ export async function chargeIdea(
   orgId: string,
   words: number,
   what: string,
+  chargeId?: string,
 ): Promise<boolean> {
+  // Retried jobs settle once: a claimed marker means this charge landed.
+  if (chargeId) {
+    const claimed = await env.DB.prepare(
+      "INSERT INTO job_markers (job, value) VALUES (?, ?) ON CONFLICT(job) DO NOTHING",
+    )
+      .bind(chargeId, "charged")
+      .run();
+    if ((claimed.meta.changes ?? 0) === 0) return true;
+  }
   const { cap, spent } = await ideaBudget(env, orgId);
   if (spent >= cap) return false;
-  const now = spent + words;
   await env.DB.prepare(
     `INSERT INTO idea_spend (org_id, night, words) VALUES (?, ?, ?)
-     ON CONFLICT(org_id, night) DO UPDATE SET words = excluded.words`,
+     ON CONFLICT(org_id, night) DO UPDATE SET words = idea_spend.words + excluded.words`,
   )
-    .bind(orgId, tonight(), now)
+    .bind(orgId, tonight(), words)
     .run();
-  if (now >= cap) {
+  if (spent + words >= cap) {
     await audit(env, null, "system", "allowance.exhausted", { org: orgId, what });
     const note =
-      `Nightly ideas paused (${cap.toLocaleString()} words spent, last on: ${what}). ` +
+      `Nightly ideas paused (${cap.toLocaleString()} tokens spent, last on: ${what}). ` +
       "Assigned work is unaffected. Raise the allowance in Setup, or say go in the morning.";
     await notify(env, orgId, { kind: "allowance.exhausted", title: "Nightly ideas paused", body: note });
     await tryDMOwner(env, orgId, note).catch(() => {});

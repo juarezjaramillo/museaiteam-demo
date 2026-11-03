@@ -205,6 +205,24 @@ describe("checkCopyAgainstPhoto", () => {
     expect(out.consistent).toBe(true);
     expect(out.box).toBeUndefined();
   });
+
+  it("refuses to buffer a giant photo", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array(21 * 1024 * 1024))) as typeof fetch;
+    try {
+      await expect(
+        checkCopyAgainstPhoto(
+          ENV,
+          "https://cdn.shopify.com/huge.png",
+          "A light roast.",
+          fakeClient({ consistent: true, photoFacts: [], conflicts: [] }),
+        ),
+      ).rejects.toThrow("Vision photo too large");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });
 
 describe("parseMoney", () => {
@@ -215,6 +233,13 @@ describe("parseMoney", () => {
     expect(parseMoney("$1,234.56")).toBe(1234.56);
     expect(parseMoney("")).toBeNull();
     expect(parseMoney("Free")).toBeNull();
+  });
+
+  it("reads comma-decimal amounts", () => {
+    expect(parseMoney("3,80 €")).toBe(3.8);
+    expect(parseMoney("−3,80")).toBe(-3.8);
+    expect(parseMoney("1.234,56")).toBe(1234.56);
+    expect(parseMoney("$1,234")).toBe(1234);
   });
 });
 
@@ -313,5 +338,33 @@ describe("checkProductPage", () => {
       fakeClient({ found: true, read: "An old dark roast description." }),
     );
     expect(out.found).toBe(false);
+  });
+
+  it("never shows the expected words to the model", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    await checkProductPage(
+      ENV,
+      PNG,
+      "A light roast with floral notes.",
+      fakeClient(
+        { found: true, read: "A light roast with floral notes. Fresh for Black Friday." },
+        7,
+        seen,
+      ),
+    );
+    expect(String(seen[0].user)).not.toContain("floral notes");
+  });
+
+  it("matching words count even when the model is unsure", async () => {
+    const out = await checkProductPage(
+      ENV,
+      PNG,
+      "A light roast with floral notes.",
+      fakeClient({
+        found: false,
+        read: "A light roast with floral notes. Fresh for Black Friday.",
+      }),
+    );
+    expect(out.found).toBe(true);
   });
 });

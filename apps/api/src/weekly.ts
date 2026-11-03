@@ -12,6 +12,18 @@ import {
 } from "./oauth.js";
 
 /**
+ * The digest channel: the org's own configured channel, or the demo
+ * channel when the founder never picked one.
+ */
+export function digestChannelName(
+  cfg: Record<string, unknown>,
+  fallback: string,
+): string {
+  const name = cfg.digest_channel;
+  return typeof name === "string" && name.trim() ? name.trim() : fallback;
+}
+
+/**
  * Weekly channel digest, one per org per ISO week. The provider config
  * carries the posted-week marker, so overlapping cron ticks can't
  * double-post: the marker write is the claim.
@@ -45,7 +57,7 @@ async function digestForOrg(env: Env, orgId: string): Promise<void> {
   if (!(await checkGuard(env, orgId, "marketer", "slack", "digest")).allowed) return;
   const token = await loadToken(env, orgId, "slack");
   if (!token) return;
-  const channel = await findChannelId(token, env.DEMO_SLACK_CHANNEL);
+  const channel = await findChannelId(token, digestChannelName(cfg, env.DEMO_SLACK_CHANNEL));
   if (!channel) return;
   const counts = await env.DB.prepare(
     `SELECT status, COUNT(*) AS c FROM runs WHERE org_id = ?

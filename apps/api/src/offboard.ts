@@ -6,6 +6,7 @@ import { createGoal } from "./goals.js";
 import { notify } from "./notify.js";
 import { getProviderConfig } from "./oauth.js";
 import { loadAdminGrant } from "./provision.js";
+import { providerFetch } from "./integrations/http.js";
 import {
   listSeatCredentials,
   wipeSeatCredentials,
@@ -40,7 +41,8 @@ async function revokeCred(
   let last = "";
   for (let i = 0; i < 2; i++) {
     try {
-      const res = await fetch(
+      const res = await providerFetch(
+        "GitHub",
         `https://api.github.com/orgs/${encodeURIComponent(org)}/memberships/${encodeURIComponent(cred.login_user)}`,
         { method: "DELETE", headers: { authorization: `Bearer ${grant}`, accept: "application/vnd.github+json" } },
       );
@@ -105,7 +107,16 @@ export async function fireSeat(
       reason: String(err).slice(0, 160),
     }).catch(() => {});
   }
-  await boxProvider().destroy(env, orgId, seatId).catch(() => {});
+  try {
+    await boxProvider().destroy(env, orgId, seatId);
+  } catch (err) {
+    await audit(env, null, "system", "box.destroy_failed", {
+      org: orgId,
+      seat: seatId,
+      error: String(err).slice(0, 160),
+    }).catch(() => {});
+    tasks.push(`Destroy ${name}'s hire computer by hand — the remote wipe failed (${String(err).slice(0, 100)})`);
+  }
   await env.DB.prepare(
     "UPDATE seats SET hired = 0, approved = 0, frozen_at = datetime('now') WHERE id = ?",
   )

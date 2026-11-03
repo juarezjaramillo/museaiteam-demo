@@ -45,7 +45,28 @@ export async function monthUsage(
   )
     .bind(orgId)
     .first<{ month: string; total: number }>();
-  return { month: row?.month ?? "", total: row?.total ?? 0 };
+  const voice = await env.DB.prepare(
+    `SELECT COALESCE(SUM(tokens), 0) AS total FROM voice_spend
+     WHERE org_id = ? AND month = strftime('%Y-%m', 'now')`,
+  )
+    .bind(orgId)
+    .first<{ total: number }>();
+  return { month: row?.month ?? "", total: (row?.total ?? 0) + (voice?.total ?? 0) };
+}
+
+/**
+ * Meter run-less spend (voice notes) into the monthly fair-use total.
+ * Atomic: concurrent transcribes can never lose each other's words.
+ */
+export async function addVoiceSpend(env: Env, orgId: string, tokens: number): Promise<void> {
+  if (!Number.isFinite(tokens) || tokens <= 0) return;
+  await env.DB.prepare(
+    `INSERT INTO voice_spend (org_id, month, tokens)
+     VALUES (?, strftime('%Y-%m', 'now'), ?)
+     ON CONFLICT(org_id, month) DO UPDATE SET tokens = voice_spend.tokens + excluded.tokens`,
+  )
+    .bind(orgId, Math.round(tokens))
+    .run();
 }
 
 export async function getMeter(env: Env, orgId: string): Promise<Meter> {
@@ -106,8 +127,8 @@ export async function maybeSendFairUseAlert(env: Env, orgId: string): Promise<vo
   if (sent) return;
   await notify(env, orgId, {
     kind: "fair_use.watch",
-    title: `Usage at 80%: ${meter.totalTokens.toLocaleString("en-US")} words`,
-    body: `${meter.seats} workers share ${allowanceFor(meter.seats).toLocaleString("en-US")} words a month. Past 100%, slowed to 1 session a day.`,
+    title: `Usage at 80%: ${meter.totalTokens.toLocaleString("en-US")} tokens`,
+    body: `${meter.seats} workers share ${allowanceFor(meter.seats).toLocaleString("en-US")} tokens a month. Past 100%, slowed to 1 session a day.`,
   });
   await audit(env, null, "system", "fair_use.alert_sent", {
     org: orgId,

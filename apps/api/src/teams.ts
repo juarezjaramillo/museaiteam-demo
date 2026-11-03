@@ -392,6 +392,15 @@ export async function putBrief(
   voice?: BriefVoice,
 ): Promise<void> {
   if (!(await visibleTeam(env, orgId, teamId, memberId))) throw new BadRole("unknown team");
+  if (voice?.key && !voice.key.startsWith(`voice/${orgId}/`)) {
+    throw new BadRole("foreign voice key");
+  }
+  const prev = await env.DB.prepare(
+    "SELECT voice_key FROM team_briefs WHERE team_id = ? AND day = ?",
+  )
+    .bind(teamId, day)
+    .first<{ voice_key: string | null }>();
+  const next = voice?.key?.trim().slice(0, 200) || null;
   await env.DB.prepare(
     `INSERT INTO team_briefs (team_id, day, text, voice_key, original_text, original_language, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
@@ -403,11 +412,21 @@ export async function putBrief(
       teamId,
       day,
       text,
-      voice?.key?.trim().slice(0, 200) || null,
+      next,
       voice?.text?.trim().slice(0, 4000) || null,
       voice?.language?.trim().slice(0, 40) || null,
     )
     .run();
+  // A re-recorded brief orphans the old audio: delete it (org prefix
+  // only, best-effort — the save already landed).
+  if (
+    prev?.voice_key &&
+    next &&
+    prev.voice_key !== next &&
+    prev.voice_key.startsWith(`voice/${orgId}/`)
+  ) {
+    await env.ARTIFACTS?.delete(prev.voice_key).catch(() => {});
+  }
   await audit(env, null, "human", "team.brief", { org: orgId, team: teamId, day });
 }
 

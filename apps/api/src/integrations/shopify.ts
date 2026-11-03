@@ -1,3 +1,5 @@
+import { providerFetch } from "./http.js";
+
 const API_VERSION = "2026-07";
 
 async function gql<T>(
@@ -6,7 +8,8 @@ async function gql<T>(
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<T> {
-  const res = await fetch(
+  const res = await providerFetch(
+    "Shopify",
     `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
     {
       method: "POST",

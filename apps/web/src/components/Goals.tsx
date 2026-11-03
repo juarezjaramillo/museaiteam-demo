@@ -221,6 +221,29 @@ export function GoalDetail({
         <span className="dim">team: {goal.squad.map(roleLabel).join(", ") || "—"}</span>
         <span className="dim">{scheduleLabel(goal.schedule)} · {modeLabel(goal.approval_mode)}</span>
         {dateLabel(goal.deadline) && <span className="dim">due {dateLabel(goal.deadline)}</span>}
+        {goal.status === "active" && (
+          <button
+            className="sm primary"
+            onClick={() =>
+              act(
+                () =>
+                  api
+                    .createRun({
+                      orgId: org,
+                      goalId,
+                      goal: goal.title,
+                      ...(goal.metric_name ? { metricName: goal.metric_name } : {}),
+                      ...(goal.metric_baseline != null ? { metricBaseline: goal.metric_baseline } : {}),
+                      ...(goal.metric_target != null ? { metricTarget: goal.metric_target } : {}),
+                    })
+                    .then((r) => onRun(r.runId)),
+                "Session started",
+              )
+            }
+          >
+            Run this goal
+          </button>
+        )}
       </div>
       {(goal.brief_note || goal.voice_key) && (
         <section>

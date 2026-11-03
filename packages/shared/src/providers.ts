@@ -64,14 +64,20 @@ const SCOPE_LABELS: Record<string, string> = Object.fromEntries(
   PROVIDER_IDS.flatMap((p) => WRITE_SCOPES[p].map((s) => [s.id, s.label])),
 );
 
+/** The campaign-image studio: a guardrail system, not an OAuth provider. */
+export const CREATIVE_SYSTEM = "creative";
+export const CREATIVE_SCOPE = "image";
+
 /** Plain-words label for a write-scope id; unknown ids pass through. */
 export function scopeLabel(id: string): string {
+  if (id === CREATIVE_SCOPE) return "Campaign images";
   return SCOPE_LABELS[id] ?? id;
 }
 
 /** Plain-words label for a provider id; unknown ids capitalize (they are product names). */
 export function providerLabel(id: string): string {
   if (isKnownProvider(id)) return PROVIDER_LABELS[id];
+  if (id === CREATIVE_SYSTEM) return "Studio";
   if (id.startsWith("mcp:")) return "Custom tool";
   return id.slice(0, 1).toUpperCase() + id.slice(1);
 }
@@ -140,6 +146,19 @@ export function validateProviderConfig(
       return {
         ok: false,
         error: "config.product_id must be a gid://shopify/Product/... ID",
+      };
+    }
+    return { ok: true };
+  }
+  if (provider === "slack") {
+    const ch = config.digest_channel;
+    if (
+      ch !== undefined &&
+      (typeof ch !== "string" || !ch.trim() || ch.length > 80)
+    ) {
+      return {
+        ok: false,
+        error: "config.digest_channel must be a 1-80 character channel name",
       };
     }
     return { ok: true };

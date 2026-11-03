@@ -569,7 +569,7 @@ export async function decideToolApproval(
     const loopSeat = run.team_id
       ? await seatForRole(env, run.team_id, "analyst").catch(() => null)
       : null;
-    const result = await callTool(env, server, row.mcp_tool, args, loopSeat);
+    const result = await callTool(env, server, row.mcp_tool, args, loopSeat, false, { runId: run.id });
     const payload = {
       server: server.name,
       tool: row.mcp_tool,

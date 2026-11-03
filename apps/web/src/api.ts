@@ -82,6 +82,7 @@ export function wsUrl(path: string): string {
 export interface CreateRunInput {
   orgId: string;
   teamId?: string;
+  goalId?: string;
   goal: string;
   metricName?: string;
   metricBaseline?: number;
@@ -169,7 +170,6 @@ export interface McpServer {
   authName: string;
   source: string;
   status: string;
-  spendCapCents: number;
   hasSecret: boolean;
 }
 
@@ -301,7 +301,10 @@ export const api = {
   killRun: (id: string) =>
     req<{ ok: boolean }>(`/api/runs/${id}/kill`, { method: "POST" }),
   revertRun: (id: string) =>
-    req<{ ok: boolean }>(`/api/runs/${id}/revert`, { method: "POST" }),
+    req<{ ok: boolean; reverted: string[]; failed: Array<{ id: string; error: string }> }>(
+      `/api/runs/${id}/revert`,
+      { method: "POST" },
+    ),
   runBaseline: (id: string) =>
     req<
       import("@museaiteam/shared").Baseline & { fresh: boolean }
@@ -314,11 +317,22 @@ export const api = {
       name: string;
       trial: import("@museaiteam/shared").TrialStatus;
       ideas: { cap: number; spent: number; left: number; graceHours: number };
+      websiteUrl: string;
     }>(`/api/orgs/${org}`),
-  putSettings: (org: string, body: { idea_allowance_words?: number; proposal_grace_hours?: number }) =>
+  putSettings: (
+    org: string,
+    body: { idea_allowance_words?: number; proposal_grace_hours?: number; website_url?: string },
+  ) =>
     req<{ ok: boolean }>(`/api/orgs/${org}/settings`, {
       method: "PUT",
       body: JSON.stringify(body),
+    }),
+  getProfile: (org: string) =>
+    req<{ profile: Record<string, string> }>(`/api/orgs/${org}/profile`),
+  putProfile: (org: string, patch: Record<string, string>) =>
+    req<{ profile: Record<string, string> }>(`/api/orgs/${org}/profile`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
     }),
   getProposals: (org: string) =>
     req<{ proposals: ProposalRow[] }>(`/api/orgs/${org}/proposals`),
@@ -326,6 +340,10 @@ export const api = {
     req<{ ok: boolean }>(`/api/orgs/${org}/proposals/${id}/decide`, {
       method: "POST",
       body: JSON.stringify({ decision, note }),
+    }),
+  disconnectProvider: (org: string, provider: string) =>
+    req<{ ok: boolean; deleted: boolean }>(`/api/orgs/${org}/providers/${provider}`, {
+      method: "DELETE",
     }),
   getConnections: (org: string) =>
     req<{
@@ -623,11 +641,6 @@ export const api = {
     req<{ ok: boolean }>(`/api/orgs/${org}/mcp/${id}/secret`, {
       method: "PUT",
       body: JSON.stringify({ secret }),
-    }),
-  putMcpCap: (org: string, id: string, cents: number) =>
-    req<{ ok: boolean }>(`/api/orgs/${org}/mcp/${id}/cap`, {
-      method: "PUT",
-      body: JSON.stringify({ cents }),
     }),
   trustMcp: (org: string, id: string, status: "trusted" | "rejected") =>
     req<{ ok: boolean }>(`/api/orgs/${org}/mcp/${id}/trust`, {

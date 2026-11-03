@@ -54,7 +54,7 @@ export function Home({
       <p className="page-sub">What needs you, and what the team just did.</p>
       {ideas && (
         <p className="dim">
-          Ideas tonight: {ideas.left.toLocaleString()} of {ideas.cap.toLocaleString()} words left.
+          Ideas tonight: {ideas.left.toLocaleString()} of {ideas.cap.toLocaleString()} tokens left.
         </p>
       )}
 

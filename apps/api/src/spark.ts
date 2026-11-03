@@ -14,6 +14,33 @@ export const DEFAULT_MODEL = "muse-spark-1.3";
  */
 export const DEFAULT_MAX_TOKENS = 2000;
 
+/** Safe to retry: chat completions have no side effects. */
+export const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+export const SPARK_TIMEOUT_MS = 60_000;
+
+export function backoffMs(attempt: number): number {
+  return 1000 * 2 ** attempt;
+}
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** fetch with a ceiling: a hung model call fails instead of wedging an act. */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  ms: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type SparkMode = "live" | "record" | "replay";
 
 export type SparkRequest = ReplayRequest;
@@ -203,27 +230,45 @@ export class SparkClient {
     }
 
     // Reasoning variance can eat any fixed budget, so a length cutoff
-    // retries with a doubled budget (bounded). Burned tokens still count.
+    // retries with a doubled budget (bounded). Malformed replies retry
+    // same-budget: variance usually fixes the JSON. Burned tokens count.
+    // Transport failures and transient statuses retry with backoff: a
+    // single 429 must never fail an act on its own.
     let budget = req.max_tokens;
     let burned = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await fetch(`${META_MODEL_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${this.env.META_MODEL_API_KEY}`,
-        },
-        // Wire body is explicit: internal keying fields must never leak here.
-        body: JSON.stringify({
-          model: req.model,
-          messages,
-          temperature: req.temperature,
-          max_tokens: budget,
-          response_format: { type: "json_object" },
-        }),
-      });
+      let res: Response;
+      try {
+        res = await fetchWithTimeout(
+          `${META_MODEL_BASE_URL}/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${this.env.META_MODEL_API_KEY}`,
+            },
+            // Wire body is explicit: internal keying fields must never leak here.
+            body: JSON.stringify({
+              model: req.model,
+              messages,
+              temperature: req.temperature,
+              max_tokens: budget,
+              response_format: { type: "json_object" },
+            }),
+          },
+          SPARK_TIMEOUT_MS,
+        );
+      } catch (err) {
+        if (attempt === 2) throw err;
+        await sleep(backoffMs(attempt));
+        continue;
+      }
       if (!res.ok) {
-        throw new Error(`Spark call failed: ${res.status} ${await res.text()}`);
+        if (!TRANSIENT_STATUSES.has(res.status) || attempt === 2) {
+          throw new Error(`Spark call failed: ${res.status} ${await res.text()}`);
+        }
+        await sleep(backoffMs(attempt));
+        continue;
       }
       const json = (await res.json()) as ChatResponse;
       try {
@@ -233,9 +278,9 @@ export class SparkClient {
         }
         return { data: parsed.data, tokensUsed: burned + parsed.tokensUsed };
       } catch (err) {
-        if (!(err instanceof LengthCutoff) || attempt === 2) throw err;
+        if (attempt === 2) throw err;
         burned += json.usage?.total_tokens ?? 0;
-        budget *= 2;
+        if (err instanceof LengthCutoff) budget *= 2;
       }
     }
     throw new Error("unreachable");

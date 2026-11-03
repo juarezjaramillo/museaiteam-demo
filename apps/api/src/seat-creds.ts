@@ -126,7 +126,7 @@ export async function seatSession(
   if (!row || row.status !== "ok") return null;
   if (row.expires_at && row.expires_at <= expiresIso(Date.now())) return null;
   try {
-    return await decryptSeatSecret(env, orgId, seatId, row);
+    return await decryptSeatSecret(env, orgId, seatId, tool, row);
   } catch {
     return null;
   }
@@ -171,6 +171,7 @@ async function decryptSeatSecret(
   env: Env,
   orgId: string,
   seatId: string,
+  tool: string,
   row: { secret_enc: string },
 ): Promise<string> {
   const key = keyFromHex(env.TOKEN_ENC_KEY);
@@ -180,10 +181,11 @@ async function decryptSeatSecret(
     if (!env.TOKEN_ENC_KEY_PREV) throw new Error("saved login cannot be read");
     const prev = keyFromHex(env.TOKEN_ENC_KEY_PREV);
     const text = await decryptFromB64(prev, row.secret_enc);
+    // Rewrap ONLY this login: the seat's other tools keep their own rows.
     await env.DB.prepare(
-      "UPDATE seat_credentials SET secret_enc = ?, updated_at = datetime('now') WHERE org_id = ? AND seat_id = ?",
+      "UPDATE seat_credentials SET secret_enc = ?, updated_at = datetime('now') WHERE org_id = ? AND seat_id = ? AND tool = ?",
     )
-      .bind(await encryptToB64(key, text), orgId, seatId)
+      .bind(await encryptToB64(key, text), orgId, seatId, tool)
       .run();
     return text;
   }
@@ -207,7 +209,7 @@ export async function seatToken(
     .first<{ secret_enc: string; kind: string; status: string }>();
   if (!row || row.kind !== "token" || row.status !== "ok") return null;
   try {
-    return await decryptSeatSecret(env, orgId, seatId, row);
+    return await decryptSeatSecret(env, orgId, seatId, tool, row);
   } catch {
     return null;
   }

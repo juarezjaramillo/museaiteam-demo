@@ -1,8 +1,15 @@
 import type { Env } from "./bindings.js";
-import { META_MODEL_BASE_URL } from "./spark.js";
+import {
+  META_MODEL_BASE_URL,
+  TRANSIENT_STATUSES,
+  backoffMs,
+  fetchWithTimeout,
+  sleep,
+} from "./spark.js";
 
 export const IMAGE_MODEL = "muse-image-1.0";
 export const IMAGE_COST_CENTS = 1;
+export const IMAGE_TIMEOUT_MS = 180_000;
 
 /** The model refused the prompt. Never retried; the act fails honestly. */
 export class ImageContentPolicyError extends Error {
@@ -26,9 +33,9 @@ export interface GeneratedImage {
 
 /**
  * Muse Image, one PNG. References (public URLs or data URLs) go to
- * /images/edits; no references go to /images/generations. 503s retry
- * with backoff (3 tries total); a content-policy 400 throws
- * ImageContentPolicyError without retrying.
+ * /images/edits; no references go to /images/generations. Transient
+ * failures retry with backoff (3 tries total); a content-policy 400
+ * throws ImageContentPolicyError without retrying.
  */
 export async function generateImage(
   env: Env,
@@ -53,14 +60,28 @@ export async function generateImage(
   }
   let lastErr = "";
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(`${META_MODEL_BASE_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${env.META_MODEL_API_KEY}`,
-      },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        `${META_MODEL_BASE_URL}${path}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${env.META_MODEL_API_KEY}`,
+          },
+          body: JSON.stringify(body),
+        },
+        IMAGE_TIMEOUT_MS,
+      );
+    } catch (err) {
+      lastErr = `Muse Image ${path}: ${String(err).slice(0, 200)}`;
+      if (attempt < 2) {
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      throw new Error(lastErr);
+    }
     if (res.ok) {
       const json = (await res.json()) as { data?: Array<{ b64_json?: string }> };
       const b64 = json.data?.[0]?.b64_json;
@@ -79,8 +100,8 @@ export async function generateImage(
       }
       throw new Error(lastErr);
     }
-    if (res.status === 503 && attempt < 2) {
-      await new Promise((r) => setTimeout(r, attempt === 0 ? 2000 : 4000));
+    if (TRANSIENT_STATUSES.has(res.status) && attempt < 2) {
+      await sleep(backoffMs(attempt));
       continue;
     }
     throw new Error(lastErr);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FeedEvent, type Playbook } from "@museaiteam/shared";
-import { api, wsUrl, type RunRow, type TeamRow } from "./api.js";
+import { api, wsUrl, type GoalRow, type RunRow, type TeamRow } from "./api.js";
 import { Approvals } from "./components/Approvals.js";
 import { Baseline } from "./components/Baseline.js";
 import { Billing } from "./components/Billing.js";
@@ -87,6 +87,8 @@ export function App() {
   const [role, setRole] = useState("owner");
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [teamId, setTeamId] = useState("");
+  const [goals, setGoals] = useState<GoalRow[]>([]);
+  const [attachGoal, setAttachGoal] = useState("");
   const [trial, setTrial] = useState<
     import("@museaiteam/shared").TrialStatus | null
   >(null);
@@ -124,6 +126,7 @@ export function App() {
   const [run, setRun] = useState<RunRow | null>(null);
   const [events, setEvents] = useState<FeedEvent[]>([]);
   const [error, setError] = useState("");
+  const [undoMsg, setUndoMsg] = useState("");
   const [notifTick, setNotifTick] = useState(0);
   const [unread, setUnread] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
@@ -144,6 +147,10 @@ export function App() {
           .getTeams(m.orgId)
           .then((t) => setTeams(t.teams))
           .catch(() => setTeams([]));
+        api
+          .getGoals(m.orgId)
+          .then((g) => setGoals(g.goals))
+          .catch(() => setGoals([]));
         api
           .myOrgs()
           .then((o) => {
@@ -206,6 +213,16 @@ export function App() {
     setWizardOpen(true);
   }
 
+  function pickGoal(id: string) {
+    setAttachGoal(id);
+    const g = goals.find((x) => x.id === id);
+    if (!g) return;
+    setGoal(g.title);
+    setMetricName(g.metric_name ?? "");
+    setBaseline(g.metric_baseline != null ? String(g.metric_baseline) : "");
+    setTarget(g.metric_target != null ? String(g.metric_target) : "");
+  }
+
   async function start(): Promise<boolean> {
     setError("");
     try {
@@ -213,12 +230,13 @@ export function App() {
       const { runId: id } = await api.createRun({
         orgId: org,
         ...(teamId ? { teamId } : {}),
+        ...(attachGoal ? { goalId: attachGoal } : {}),
         goal,
         metricName: metricName.trim() || undefined,
         metricBaseline: num(baseline),
         metricTarget: num(target),
         timeboxDays: num(timebox),
-        voteWindowMs: 60_000,
+        voteWindowMs: 15_000,
       });
       setRunId(id);
       setRun(null);
@@ -234,7 +252,27 @@ export function App() {
     setRunId(id);
     setRun(null);
     setEvents([]);
+    setUndoMsg("");
     go("runs");
+  }
+
+  async function undo() {
+    if (!runId) return;
+    setUndoMsg("");
+    try {
+      const r = await api.revertRun(runId);
+      setUndoMsg(
+        r.ok
+          ? `Undone: ${r.reverted.length} reversed.`
+          : `${r.reverted.length} reversed, ${r.failed.length} left: ${r.failed
+              .map((f) => f.error)
+              .join("; ")
+              .slice(0, 200)}`,
+      );
+      setRun(await api.getRun(runId));
+    } catch (e) {
+      setUndoMsg(String(e));
+    }
   }
 
   function openGoal(id: string) {
@@ -383,7 +421,7 @@ export function App() {
                   <span className={`status status-${run.status}`}>{statusLabel(run.status)}</span>
                   <span className="dim">session {run.id.slice(0, 8)}</span>
                   <span className="meter">
-                    {run.tokens_used.toLocaleString()} words
+                    {run.tokens_used.toLocaleString()} tokens
                   </span>
                   <div className="row">
                     {active && (
@@ -391,9 +429,10 @@ export function App() {
                         Stop
                       </button>
                     )}
-                    <button className="sm" onClick={() => runId && api.revertRun(runId)}>
+                    <button className="sm" onClick={() => void undo()}>
                       Undo all
                     </button>
+                    {undoMsg && <span className="dim">{undoMsg}</span>}
                   </div>
                 </section>
               )}
@@ -419,6 +458,23 @@ export function App() {
                             {t.name}
                           </option>
                         ))}
+                      </select>
+                    </label>
+                  </div>
+                )}
+                {goals.length > 0 && (
+                  <div className="row">
+                    <label>
+                      Goal{" "}
+                      <select value={attachGoal} onChange={(e) => pickGoal(e.target.value)}>
+                        <option value="">Quick session (new goal)</option>
+                        {goals
+                          .filter((g) => g.status === "active")
+                          .map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.title}
+                            </option>
+                          ))}
                       </select>
                     </label>
                   </div>

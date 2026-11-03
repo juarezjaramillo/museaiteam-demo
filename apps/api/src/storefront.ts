@@ -44,7 +44,16 @@ function checkoutBoxes(
   const discount = parseMoney(result.discountAmountRead);
   const subtotal = parseMoney(result.subtotalRead);
   const total = parseMoney(result.totalRead);
-  return result.boxes.map((b) => {
+  // The model may return stray boxes; only the code, total, and first
+  // other box (the discount line) render, so a passed check never shows red.
+  let keptDiscount = false;
+  const kept = result.boxes.filter((b) => {
+    if (b.label === "Code applied" || b.label === "Total") return true;
+    if (keptDiscount) return false;
+    keptDiscount = true;
+    return true;
+  });
+  return kept.map((b) => {
     let ok = false;
     if (b.label === "Code applied") {
       ok = result.codeRead === code;
@@ -80,11 +89,23 @@ export async function executeStorefrontCheckAct(
   const { orgId, runId, shop, token, hooks } = args;
   const browser = args.browser ?? new CloudflareStoreBrowser(env);
   const spark = args.spark ?? new SparkClient(env);
+  // Shots published before a later phase fails: revoked with the failure
+  // so no proof floats around unattached to a finished check.
+  const publishedTokens: string[] = [];
   const fail = async (
     target: string,
     message: string,
     systemError?: string,
   ): Promise<void> => {
+    if (publishedTokens.length > 0) {
+      const now = new Date().toISOString();
+      for (const t of publishedTokens) {
+        await env.DB.prepare("UPDATE public_images SET revoked_at = ? WHERE token = ?")
+          .bind(now, t)
+          .run()
+          .catch(() => {});
+      }
+    }
     await hooks.recordAction("shopify.storefront_check", target, "failed", undefined, {
       failReason: message,
       reason: message,
@@ -229,9 +250,10 @@ export async function executeStorefrontCheckAct(
         await fail("live store", "The new copy is not on the product page yet.");
         return;
       }
-      const { url } = await publishPublicImage(env, { orgId, actionId, r2key: key });
+      const published = await publishPublicImage(env, { orgId, actionId, r2key: key });
+      publishedTokens.push(published.token);
       productShot = {
-        url,
+        url: published.url,
         boxes: box ? [{ label: "New copy", box, ok: true }] : [],
       };
     }
@@ -279,9 +301,10 @@ export async function executeStorefrontCheckAct(
         await fail(code, msg);
         return;
       }
-      const { url } = await publishPublicImage(env, { orgId, actionId, r2key: key });
+      const published = await publishPublicImage(env, { orgId, actionId, r2key: key });
+      publishedTokens.push(published.token);
       checkoutShot = {
-        url,
+        url: published.url,
         boxes: checkoutBoxes(result, code, expectedDiscount),
         code,
         percent,

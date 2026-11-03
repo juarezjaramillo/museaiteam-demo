@@ -1,7 +1,14 @@
 import { z } from "zod";
 import { crewName } from "@museaiteam/shared";
+import { addVoiceSpend } from "./billing.js";
 import type { Env } from "./bindings.js";
-import { SparkClient } from "./spark.js";
+import {
+  SparkClient,
+  TRANSIENT_STATUSES,
+  backoffMs,
+  fetchWithTimeout,
+  sleep,
+} from "./spark.js";
 import { audit } from "./db.js";
 import { getProviderConfig, loadToken } from "./oauth.js";
 import { listProducts } from "./integrations/shopify.js";
@@ -11,6 +18,17 @@ import { listGoals } from "./goals.js";
 export const VOICE_MODEL = "muse-voice-transcribe-1.0";
 export const VOICE_DOLLARS_PER_HOUR = 0.18;
 export const VOICE_MAX_BYTES = 25 * 1024 * 1024;
+export const VOICE_TIMEOUT_MS = 120_000;
+/**
+ * Fair-use rate for dictated notes: speech runs ~150 words a minute,
+ * counted 1:1 into the meter the dashboard already calls words.
+ */
+export const VOICE_METER_WORDS_PER_SECOND = 2.5;
+
+export function voiceMeterWords(seconds: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.max(1, Math.round(seconds * VOICE_METER_WORDS_PER_SECOND));
+}
 
 const META_ASR_URL = "https://api.meta.ai/v1/asr/transcribe";
 
@@ -66,6 +84,11 @@ async function shopifyTitles(env: Env, orgId: string): Promise<string[]> {
     if (!token || typeof shop !== "string" || !shop) return [];
     const titles = (await listProducts(shop, token)).map((p) => p.title);
     productCache.set(orgId, { at: Date.now(), titles });
+    // Stale orgs never come back: evict the oldest instead of growing forever.
+    if (productCache.size > 500) {
+      const oldest = productCache.keys().next();
+      if (!oldest.done) productCache.delete(oldest.value);
+    }
     return titles;
   } catch {
     return [];
@@ -268,19 +291,31 @@ export async function transcribeUpload(
       ),
     );
     form.append("audio", new Blob([bytes], { type: "audio/wav" }), "audio.wav");
-    return fetch(`${META_ASR_URL}?sessionId=${sessionId}`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.META_MODEL_API_KEY}`,
-        accept: "text/event-stream",
+    return fetchWithTimeout(
+      `${META_ASR_URL}?sessionId=${sessionId}`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.META_MODEL_API_KEY}`,
+          accept: "text/event-stream",
+        },
+        body: form,
       },
-      body: form,
-    });
+      VOICE_TIMEOUT_MS,
+    );
   };
 
-  let res = await callMeta();
-  if (res.status === 500) res = await callMeta();
-  if (!res.ok || !res.body) return sseError(mapMetaError(res.status));
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      res = await callMeta();
+    } catch {
+      res = null;
+    }
+    if (res && (res.ok || !TRANSIENT_STATUSES.has(res.status))) break;
+    if (attempt < 2) await sleep(backoffMs(attempt));
+  }
+  if (!res || !res.ok || !res.body) return sseError(mapMetaError(res?.status ?? 500));
 
   const audioKey = `voice/${orgId}/${crypto.randomUUID()}.wav`;
   const seconds = wavSeconds(bytes) ?? 0;
@@ -331,10 +366,13 @@ export async function transcribeUpload(
         }
         await env.ARTIFACTS.put(audioKey, bytes);
         const cents = Math.round(((seconds / 3600) * VOICE_DOLLARS_PER_HOUR * 100) * 100) / 100;
+        const meterWords = voiceMeterWords(seconds);
+        await addVoiceSpend(env, orgId, meterWords);
         await audit(env, null, "human", "voice.metered", {
           org: orgId,
           seconds: Math.round(seconds * 10) / 10,
           cents,
+          meterWords,
           key: audioKey,
         });
         send({ type: "done", audioKey, seconds });

@@ -1,14 +1,15 @@
 import type { Baseline } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { ProposalDraft, metricLineFor } from "./agents.js";
-import { audit, getRun } from "./db.js";
+import { audit, getRun, goalWithBrief } from "./db.js";
 import { publishEvent } from "./events.js";
 import { DEFAULT_MODEL, SparkClient } from "./spark.js";
 
 /**
- * The fair comparison: same model, same goal + metric context, one shot,
- * no debate, no memory, no tools. Costs one call; stored per run so
- * repeat clicks never re-burn. Baseline tokens stay out of the run meter.
+ * The fair comparison: same model, same goal + brief + metric context,
+ * one shot, no debate, no memory, no tools. Costs one call; stored per
+ * run so repeat clicks never re-burn. Baseline tokens stay out of the
+ * run meter.
  */
 export async function runBaseline(
   env: Env,
@@ -22,18 +23,33 @@ export async function runBaseline(
     .bind(runId)
     .first<{ title: string; meta: string }>();
   if (existing) {
-    const meta = JSON.parse(existing.meta) as {
-      body: string;
-      model: string;
-      tokens: number;
-    };
-    return {
-      title: existing.title,
-      body: meta.body,
-      model: meta.model,
-      tokens: meta.tokens,
-      fresh: false,
-    };
+    try {
+      const meta = JSON.parse(existing.meta) as {
+        body: unknown;
+        model: unknown;
+        tokens: unknown;
+      };
+      if (
+        typeof meta.body !== "string" ||
+        typeof meta.model !== "string" ||
+        typeof meta.tokens !== "number"
+      ) {
+        throw new Error("bad baseline meta");
+      }
+      return {
+        title: existing.title,
+        body: meta.body,
+        model: meta.model,
+        tokens: meta.tokens,
+        fresh: false,
+      };
+    } catch {
+      // A corrupt cache heals by re-running: drop it so the repeat
+      // click burns one call instead of throwing forever.
+      await env.DB.prepare("DELETE FROM artifacts WHERE run_id = ? AND kind = 'baseline'")
+        .bind(runId)
+        .run();
+    }
   }
   const metric = metricLineFor({
     metric_name: run.metric_name,
@@ -46,7 +62,7 @@ export async function runBaseline(
     system:
       "You are a senior generalist. Give your single best plan. No tools, no discussion, one shot.",
     user: [
-      `Goal: ${run.goal}`,
+      `Goal: ${goalWithBrief(run.goal, run.brief_note ?? "")}`,
       metric,
       "",
       "Propose the highest-leverage initiative.",

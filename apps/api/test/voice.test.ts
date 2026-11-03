@@ -61,6 +61,9 @@ function fakeR2() {
         store.set(key, value);
       },
       get: async (key: string) => (store.has(key) ? { body: store.get(key) } : null),
+      delete: async (key: string) => {
+        store.delete(key);
+      },
     },
   };
 }
@@ -246,6 +249,8 @@ describe("transcribeUpload", () => {
       | undefined;
     expect(metered).toBeDefined();
     expect(JSON.parse(String(metered?.detail))).toMatchObject({ seconds: 10, cents: 0.05 });
+    expect(w.tables.voice_spend).toHaveLength(1);
+    expect(w.tables.voice_spend[0]).toMatchObject({ org_id: ORG, tokens: 25 });
 
     expect(w.metaCalls).toHaveLength(1);
     expect(w.metaCalls[0].url).toContain("sessionId=");
@@ -279,7 +284,7 @@ describe("transcribeUpload", () => {
     }
   });
 
-  it("retries a 500 once, then fails plain", async () => {
+  it("retries a 500, then fails plain", async () => {
     const w = await seedWorld({});
     let calls = 0;
     setMeta(w, () => {
@@ -296,7 +301,20 @@ describe("transcribeUpload", () => {
     expect(eventsOf(await res2.text())).toEqual([
       { type: "error", message: "Couldn't hear that one. Try again." },
     ]);
-    expect(w2.metaCalls).toHaveLength(2);
+    expect(w2.metaCalls).toHaveLength(3);
+    expect(w2.tables.voice_spend).toHaveLength(0);
+  });
+
+  it("a 429 then a 200 transcribes without failing", async () => {
+    const w = await seedWorld({});
+    let calls = 0;
+    setMeta(w, () => {
+      calls += 1;
+      return calls === 1 ? new Response("{}", { status: 429 }) : sseResponse(FLOW);
+    });
+    const res = await transcribeUpload(w.env, ORG, new Blob([makeWav() as BlobPart]), "goal");
+    expect(eventsOf(await res.text()).map((e) => e.type)).toContain("done");
+    expect(w.metaCalls).toHaveLength(2);
   });
 
   it("rejects bad uploads with plain 400s", async () => {
@@ -436,6 +454,32 @@ describe("voice fields on goals and briefs", () => {
       originalText: "Oigan, también contesten los tickets en español.",
       originalLanguage: "Spanish",
     });
+  });
+
+  it("re-recording a brief deletes the old audio", async () => {
+    const tables = blankTables();
+    tables.teams.push({ id: "t1", org_id: ORG, name: "Store Crew" });
+    const r2 = fakeR2();
+    r2.store.set("voice/org1/old.wav", new Uint8Array([1]));
+    const env = { DB: new FakeDB(tables), ARTIFACTS: r2.bucket } as unknown as Env;
+    await putBrief(env, ORG, "t1", "First.", "2026-11-02", undefined, { key: "voice/org1/old.wav" });
+    await putBrief(env, ORG, "t1", "Second.", "2026-11-02", undefined, { key: "voice/org1/new.wav" });
+    expect(r2.store.has("voice/org1/old.wav")).toBe(false);
+    expect(await getBrief(env, ORG, "t1", "2026-11-02")).toMatchObject({
+      voiceKey: "voice/org1/new.wav",
+    });
+  });
+
+  it("goals and briefs reject another org's voice key", async () => {
+    const tables = blankTables();
+    tables.teams.push({ id: "t1", org_id: ORG, name: "Store Crew" });
+    const env = { DB: new FakeDB(tables) } as unknown as Env;
+    await expect(
+      createGoal(env, ORG, { title: "Get the store ready for Black Friday", voiceKey: "voice/org2/x.wav" }),
+    ).rejects.toThrow("foreign voice key");
+    await expect(
+      putBrief(env, ORG, "t1", "Today matters.", "2026-11-02", undefined, { key: "voice/org2/x.wav" }),
+    ).rejects.toThrow("foreign voice key");
   });
 });
 

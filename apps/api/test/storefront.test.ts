@@ -249,8 +249,10 @@ describe("storefront check act", () => {
       summary: "Code BREW20 was not accepted at checkout",
     });
     expect(w.browserCalls.checkout).toBe(2);
-    // The product screenshot was already published before checkout failed.
+    // The product screenshot was already published before checkout failed;
+    // it is revoked with the failure instead of floating unattached.
     expect(w.tables.public_images).toHaveLength(1);
+    expect(w.tables.public_images[0].revoked_at).toBeTruthy();
   });
 
   it("password missing: skipped with a Setup pointer, no browser calls", async () => {
@@ -282,5 +284,33 @@ describe("storefront check act", () => {
     const w = await seedWorld({ discount: false, copy: false });
     await runAct(w, fakeBrowser(w, {}), fakeSpark({}));
     expect(checkRow(w)).toBeUndefined();
+  });
+
+  it("stray vision boxes never render on a passed check", async () => {
+    const w = await seedWorld({});
+    await runAct(
+      w,
+      fakeBrowser(w, {}),
+      fakeSpark({
+        checkout: [
+          {
+            ...CHECKOUT_PASS,
+            boxes: [
+              ...CHECKOUT_PASS.boxes,
+              { label: "Something else", box: [50, 60, 70, 80] },
+            ],
+          },
+        ],
+      }),
+    );
+    const proof = JSON.parse(String(checkRow(w)?.proof)) as {
+      images: Array<{ boxes: Array<{ label: string; ok: boolean }> }>;
+    };
+    expect(proof.images[0].boxes.map((b) => b.label)).toEqual([
+      "Code applied",
+      "−$3.80",
+      "Total",
+    ]);
+    expect(proof.images[0].boxes.every((b) => b.ok)).toBe(true);
   });
 });

@@ -1,9 +1,11 @@
+import { providerFetch } from "./http.js";
+
 async function hs(
   token: string,
   path: string,
   init?: RequestInit,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`https://api.hubapi.com${path}`, {
+  const res = await providerFetch("HubSpot", `https://api.hubapi.com${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
@@ -43,7 +45,7 @@ export async function findNewestTicket(
 export async function recentClosedTickets(
   token: string,
   limit = 10,
-): Promise<Array<{ subject: string; content: string }>> {
+): Promise<Array<{ subject: string; content: string; closedate: string }>> {
   const stages = await ticketStages(token);
   const closed = new Set(stages.filter((s) => s.closed).map((s) => s.id));
   const json = await hs(token, "/crm/v3/objects/tickets/search", {
@@ -51,17 +53,25 @@ export async function recentClosedTickets(
     body: JSON.stringify({
       sorts: [{ propertyName: "closedate", direction: "DESCENDING" }],
       limit,
-      properties: ["subject", "content", "hs_pipeline_stage"],
+      properties: ["subject", "content", "hs_pipeline_stage", "closedate"],
     }),
   });
   const results = (json.results as
-    | Array<{ properties?: { subject?: string; content?: string; hs_pipeline_stage?: string } }>
+    | Array<{
+        properties?: {
+          subject?: string;
+          content?: string;
+          hs_pipeline_stage?: string;
+          closedate?: string;
+        };
+      }>
     | undefined) ?? [];
   return results
     .filter((r) => closed.has(r.properties?.hs_pipeline_stage ?? ""))
     .map((r) => ({
       subject: (r.properties?.subject ?? "(no subject)").slice(0, 140),
       content: (r.properties?.content ?? "").slice(0, 400),
+      closedate: r.properties?.closedate ?? "",
     }));
 }
 

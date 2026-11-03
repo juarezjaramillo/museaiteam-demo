@@ -14,6 +14,9 @@ export interface ImageFacts {
   mustNotSay?: string[];
 }
 
+/** Product photos come from store-controlled URLs: never buffer past this. */
+export const VISION_PHOTO_MAX_BYTES = 20 * 1024 * 1024;
+
 function imageFactsPrompt(facts: ImageFacts): string {
   const lines = [
     "You are a careful proofreader and object grounding expert. Read every piece of text in this image.",
@@ -136,7 +139,11 @@ function includesNormalized(haystack: string, needle: string): boolean {
   return h.includes(n) || (h.length >= 20 && n.includes(h));
 }
 
-/** Is the new copy live on the product page? Found only when the model points at it AND the words match. */
+/**
+ * Is the new copy live on the product page? The model never sees the
+ * expected words (a shown sentence can be parroted back); found is
+ * decided in code from what was actually read.
+ */
 export async function checkProductPage(
   env: Env,
   png: Uint8Array,
@@ -148,29 +155,34 @@ export async function checkProductPage(
     system:
       "You are a careful proofreader and object grounding expert. You read product pages exactly and ground what you find with a bounding box. Reply JSON only.",
     user: [
-      "Product page screenshot above. Is the product description starting with (or clearly containing) this sentence?",
-      `"""${expectedCopyStart}"""`,
-      "",
-      "Read the description text you actually see and give its bounding box [x_min, y_min, x_max, y_max] on a 0–1000 grid with (0,0) top-left.",
-      'Return JSON only: {"found": true, "read": "<description text as seen>", "box": [...]}.',
+      "Product page screenshot above. Read the product description printed on the page — only words you actually see, never invented text.",
+      "Give its bounding box [x_min, y_min, x_max, y_max] on a 0–1000 grid with (0,0) top-left.",
+      'Return JSON only: {"found": <a description is visible>, "read": "<description text as seen>", "box": [...]}.',
     ].join("\n"),
     images: [png],
     temperature: 0.1,
   });
   const d = out.data;
   return {
-    found: d.found && includesNormalized(d.read, expectedCopyStart),
+    found: includesNormalized(d.read, expectedCopyStart),
     read: d.read,
     ...(d.box ? { box: d.box } : {}),
     tokens: out.tokensUsed,
   };
 }
 
-/** Parse storefront money ("$3.80", "−$3.80", "$1,234.56") or null. */
+/** Parse storefront money ("$3.80", "−$3.80", "$1,234.56", "3,80 €") or null. */
 export function parseMoney(s: string): number | null {
-  const cleaned = s
-    .replace(/[−–—]/g, "-")
-    .replace(/[^0-9.\-]/g, "");
+  const numeric = s.replace(/[−–—]/g, "-").replace(/[^0-9.,\-]/g, "");
+  let normalized = numeric;
+  if (/,\d{2}$/.test(numeric) && !/\.\d{2}$/.test(numeric)) {
+    // Comma-decimal locale ("3,80", "1.234,56"): dots are thousands.
+    const withoutDots = numeric.replace(/\./g, "");
+    const lastComma = withoutDots.lastIndexOf(",");
+    normalized = withoutDots.slice(0, lastComma) + "." + withoutDots.slice(lastComma + 1);
+    normalized = normalized.replace(/,/g, "");
+  }
+  const cleaned = normalized.replace(/[^0-9.\-]/g, "");
   if (!cleaned || cleaned === "-" || cleaned === "." || cleaned === "-.") return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
@@ -269,6 +281,9 @@ export async function checkCopyAgainstPhoto(
       throw new Error(`Vision photo fetch failed: ${res.status}`);
     }
     image = new Uint8Array(await res.arrayBuffer());
+    if (image.byteLength > VISION_PHOTO_MAX_BYTES) {
+      throw new Error(`Vision photo too large: ${image.byteLength} bytes`);
+    }
   }
   const out = await c.chatWithImages(CopyPhotoCheck, {
     system:

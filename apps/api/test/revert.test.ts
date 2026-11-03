@@ -72,3 +72,32 @@ describe("executeRevert kept-parent guard", () => {
     expect(deleted).toContain("ISSUE-1");
   });
 });
+
+describe("executeRevert terminal guard", () => {
+  it("requireTerminal refuses a live run and deletes nothing", async () => {
+    const { env, tables } = await seed(false);
+    tables.runs[0].status = "acting";
+    await expect(executeRevert(env, "org1", "run1", { requireTerminal: true })).rejects.toThrow(
+      "session is acting",
+    );
+    expect(deleted).toHaveLength(0);
+  });
+
+  it("requireTerminal allows finished runs", async () => {
+    for (const status of ["done", "failed", "halted"]) {
+      const { env, tables } = await seed(false);
+      tables.runs[0].status = status;
+      const res = await executeRevert(env, "org1", "run1", { requireTerminal: true });
+      expect(res.failed).toHaveLength(0);
+      deleted.length = 0;
+    }
+  });
+
+  it("the metric verdict still reverts live runs", async () => {
+    const { env, tables } = await seed(false);
+    tables.runs[0].status = "acting";
+    const res = await executeRevert(env, "org1", "run1");
+    expect(res.failed).toHaveLength(0);
+    expect(deleted.sort()).toEqual(["SUB-1", "SUB-2"]);
+  });
+});

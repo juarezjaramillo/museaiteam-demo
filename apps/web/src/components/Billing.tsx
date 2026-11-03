@@ -79,7 +79,7 @@ export function Billing({ org }: { org: string }) {
       <p className={info.meter.throttled ? "error" : "dim"}>
         {monthLabel(info.meter.month) || "This month"}:{" "}
         {info.meter.totalTokens.toLocaleString("en-US")} of{" "}
-        {info.meter.allowance.toLocaleString("en-US")} words (
+        {info.meter.allowance.toLocaleString("en-US")} tokens (
         {info.meter.perWorker.toLocaleString("en-US")} each).
         {info.meter.throttled && " Slowed to 1 session a day until reset."}
       </p>

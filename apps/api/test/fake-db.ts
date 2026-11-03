@@ -37,6 +37,16 @@ export interface FakeTables {
   rulings: Row[];
   public_images: Row[];
   provider_config: Row[];
+  guardrails: Row[];
+  voice_spend: Row[];
+  idea_spend: Row[];
+  job_markers: Row[];
+  slack_seen_events: Row[];
+  metric_points: Row[];
+  goal_events: Row[];
+  artifacts: Row[];
+  memory_gather_state: Row[];
+  company_profile: Row[];
 }
 
 export function blankTables(): FakeTables {
@@ -71,6 +81,16 @@ export function blankTables(): FakeTables {
     rulings: [],
     public_images: [],
     provider_config: [],
+    guardrails: [],
+    voice_spend: [],
+    idea_spend: [],
+    job_markers: [],
+    slack_seen_events: [],
+    metric_points: [],
+    goal_events: [],
+    artifacts: [],
+    memory_gather_state: [],
+    company_profile: [],
   };
 }
 
@@ -84,23 +104,117 @@ export class FakeDB {
   prepare(sql: string) {
     const q = norm(sql);
     const t = this.tables;
-    return {
-      bind: (...p: unknown[]) => ({
+    // Real D1 statements run with or without bind(); tests do both.
+    const stmt = (p: unknown[]) => ({
         first: async <T>(): Promise<T | null> => {
           if (q.startsWith("SELECT * FROM runs WHERE id = ?")) {
             return (t.runs.find((r) => r.id === p[0]) as T) ?? null;
           }
           if (q.startsWith("SELECT id FROM runs WHERE goal_id = ? AND kind = 'trigger'")) {
-            // Time is frozen in tests: any trigger run counts as cooling.
-            const r = t.runs.find((x) => x.goal_id === p[0] && x.kind === "trigger");
+            const dayAgo = Date.now() - 86400_000;
+            const r = t.runs.find(
+              (x) =>
+                x.goal_id === p[0] &&
+                x.kind === "trigger" &&
+                Date.parse(String(x.created_at)) > dayAgo,
+            );
             return ((r ? { id: r.id } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT org_id FROM runs WHERE id = ?")) {
             const r = t.runs.find((x) => x.id === p[0]);
             return ((r ? { org_id: r.org_id } : null) as T) ?? null;
           }
+          if (q.startsWith("SELECT title, meta FROM artifacts WHERE run_id = ? AND kind = 'baseline'")) {
+            const r = t.artifacts.find((x) => x.run_id === p[0] && x.kind === "baseline");
+            return ((r ? { title: r.title, meta: r.meta } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT cursor FROM memory_gather_state WHERE org_id = ? AND source = ?")) {
+            const r = t.memory_gather_state.find((x) => x.org_id === p[0] && x.source === p[1]);
+            return ((r ? { cursor: r.cursor } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT * FROM company_profile WHERE org_id = ?")) {
+            return ((t.company_profile.find((x) => x.org_id === p[0]) ?? null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT website_url FROM orgs WHERE id = ?")) {
+            const r = t.orgs.find((x) => x.id === p[0]);
+            return ((r ? { website_url: r.website_url ?? "" } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT value FROM job_markers WHERE job = '")) {
+            const job = q.slice("SELECT value FROM job_markers WHERE job = '".length).split("'")[0];
+            const r = t.job_markers.find((x) => x.job === job);
+            return ((r ? { value: r.value } : null) as T) ?? null;
+          }
           if (q.startsWith("SELECT * FROM goals WHERE id = ? AND org_id = ?")) {
             return ((t.goals.find((r) => r.id === p[0] && r.org_id === p[1]) as T) ?? null);
+          }
+          if (q.startsWith("SELECT id FROM goal_events WHERE goal_id = ? AND kind = 'goal.stalled'")) {
+            const weekAgo = Date.now() - 7 * 86400_000;
+            const r = t.goal_events.find(
+              (x) => x.goal_id === p[0] && Date.parse(String(x.created_at)) > weekAgo,
+            );
+            return ((r ? { id: r.id ?? "e1" } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT value FROM metric_points WHERE goal_id = ?")) {
+            const cutoff = Date.now() - 14 * 86400_000;
+            const windowed = q.includes("datetime(ts) >");
+            const windowedBefore = q.includes("datetime(ts) <=");
+            const pts = t.metric_points.filter(
+              (x) =>
+                x.goal_id === p[0] &&
+                (!windowed || Date.parse(String(x.ts)) > cutoff) &&
+                (!windowedBefore || Date.parse(String(x.ts)) <= cutoff),
+            );
+            if (pts.length === 0) return null;
+            const v = q.includes("ORDER BY rowid DESC") ? pts[pts.length - 1].value : pts[0].value;
+            return { value: v } as T;
+          }
+          if (q.startsWith("SELECT COUNT(*) AS n FROM seats s")) {
+            const n = t.seats.filter(
+              (s) =>
+                s.hired === 1 &&
+                t.teams.some((x) => x.id === s.team_id && x.org_id === p[0]),
+            ).length;
+            return { n } as T;
+          }
+          if (q.startsWith("SELECT strftime('%Y-%m', 'now')")) {
+            const total = t.runs
+              .filter((r) => r.org_id === p[0])
+              .reduce((s, r) => s + (r.tokens_used ?? 0), 0);
+            return { month: new Date().toISOString().slice(0, 7), total } as T;
+          }
+          if (q.startsWith("SELECT COALESCE(SUM(tokens), 0) AS total FROM voice_spend")) {
+            const month = new Date().toISOString().slice(0, 7);
+            const total = t.voice_spend
+              .filter((r) => r.org_id === p[0] && r.month === month)
+              .reduce((s, r) => s + (r.tokens ?? 0), 0);
+            return { total } as T;
+          }
+          if (q.startsWith("SELECT voice_key FROM team_briefs WHERE team_id = ? AND day = ?")) {
+            const r = t.team_briefs.find((x) => x.team_id === p[0] && x.day === p[1]);
+            return ((r ? { voice_key: r.voice_key ?? null } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT text, reviewed_at, voice_key, original_text, original_language")) {
+            const r = t.team_briefs.find((x) => x.team_id === p[0] && x.day === p[1]);
+            return ((r
+              ? {
+                  text: r.text,
+                  reviewed_at: r.reviewed_at ?? null,
+                  voice_key: r.voice_key ?? null,
+                  original_text: r.original_text ?? null,
+                  original_language: r.original_language ?? null,
+                }
+              : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT id, payload FROM actions WHERE run_id = ?")) {
+            const rows = t.actions.filter(
+              (a) => a.run_id === p[0] && a.kind === "creative.campaign_image" && a.status === "pending",
+            );
+            const last = rows[rows.length - 1];
+            return ((last ? { id: last.id, payload: last.payload } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT kind, target FROM actions WHERE id = ? AND run_id = ?")) {
+            const r = t.actions.find((a) => a.id === p[0] && a.run_id === p[1]);
+            return ((r ? { kind: r.kind, target: r.target } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT id, kind FROM actions WHERE id = ? AND run_id = ?")) {
             const r = t.actions.find((x) => x.id === p[0] && x.run_id === p[1]);
@@ -141,7 +255,8 @@ export class FakeDB {
             return ((r ? { idea_allowance_words: r.idea_allowance_words ?? 250000 } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT words FROM idea_spend WHERE org_id = ? AND night = ?")) {
-            return null;
+            const r = t.idea_spend.find((x) => x.org_id === p[0] && x.night === p[1]);
+            return ((r ? { words: r.words } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT * FROM mcp_servers WHERE org_id = ? AND id = ?")) {
             return ((t.mcp_servers.find((r) => r.org_id === p[0] && r.id === p[1]) as T) ?? null);
@@ -238,6 +353,15 @@ export class FakeDB {
           if (q.startsWith("SELECT secret_enc FROM tool_admin_grants WHERE org_id = ? AND tool = ?")) {
             const r = t.tool_admin_grants.find((x) => x.org_id === p[0] && x.tool === p[1] && x.status === "granted");
             return ((r ? { secret_enc: r.secret_enc } : null) as T) ?? null;
+          }
+          if (q.startsWith("SELECT trial_ends_at, grace_used, subscribed FROM orgs WHERE id = ?")) {
+            const r = t.orgs.find((x) => x.id === p[0]);
+            if (!r) return (null as T) ?? null;
+            return {
+              trial_ends_at: r.trial_ends_at ?? Date.now() + 14 * 86_400_000,
+              grace_used: r.grace_used ?? 0,
+              subscribed: r.subscribed ?? 0,
+            } as T;
           }
           if (q.startsWith("SELECT trial_started_at, trial_ends_at, grace_used, subscribed")) {
             const r = t.orgs.find((x) => x.id === p[0]);
@@ -364,7 +488,8 @@ export class FakeDB {
             return ((r ? { r2_key: r.r2_key } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT systems, write_scope FROM guardrails")) {
-            return (null as T) ?? null;
+            const r = t.guardrails.find((x) => x.org_id === p[0] && x.worker_role === p[1]);
+            return ((r ? { systems: r.systems, write_scope: r.write_scope } : null) as T) ?? null;
           }
           if (q.startsWith("SELECT id FROM proposals_out WHERE org_id = ? AND kind = 'signup'")) {
             const r = t.proposals_out.find(
@@ -375,6 +500,32 @@ export class FakeDB {
           throw new Error(`FakeDB.first: unhandled: ${q.slice(0, 90)}`);
         },
         all: async <T>(): Promise<{ results: T[] }> => {
+          if (q.startsWith("SELECT id, org_id, goal_id, lineup FROM runs WHERE status = 'queued'")) {
+            return {
+              results: t.runs
+                .filter((r) => r.status === "queued")
+                .slice(0, 20)
+                .map((r) => ({ id: r.id, org_id: r.org_id, goal_id: r.goal_id ?? null, lineup: r.lineup })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT lineup FROM runs WHERE org_id = ?")) {
+            const statuses = p.slice(1) as string[];
+            return {
+              results: t.runs
+                .filter(
+                  (r) =>
+                    r.org_id === p[0] && r.kill_flag === 0 && statuses.includes(r.status),
+                )
+                .map((r) => ({ lineup: r.lineup })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT org_id, config FROM provider_config WHERE provider = 'slack'")) {
+            return {
+              results: t.provider_config
+                .filter((r) => r.provider === "slack")
+                .map((r) => ({ org_id: r.org_id, config: r.config })) as T[],
+            };
+          }
           if (q.startsWith("SELECT lineup FROM runs WHERE goal_id = ?")) {
             return {
               results: t.runs
@@ -546,6 +697,54 @@ export class FakeDB {
           if (q.startsWith("SELECT * FROM goals WHERE org_id = ?")) {
             return { results: t.goals.filter((x) => x.org_id === p[0]) as T[] };
           }
+          if (q.startsWith("SELECT tool, kind, login_user, status, updated_at, expires_at FROM seat_credentials WHERE seat_id = ?")) {
+            return {
+              results: t.seat_credentials
+                .filter((x) => x.seat_id === p[0])
+                .map((x) => ({
+                  tool: x.tool, kind: x.kind, login_user: x.login_user,
+                  status: x.status, updated_at: x.updated_at, expires_at: x.expires_at,
+                })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT ts, value, source FROM metric_points WHERE goal_id = ?")) {
+            return {
+              results: t.metric_points
+                .filter((x) => x.goal_id === p[0])
+                .map((x) => ({ ts: x.ts, value: x.value, source: x.source })) as T[],
+            };
+          }
+          if (q.startsWith("SELECT DISTINCT org_id AS id FROM oauth_tokens")) {
+            const only = q.includes("WHERE provider = 'slack'") ? "slack" : null;
+            const ids = [
+              ...new Set(
+                t.oauth_tokens
+                  .filter((x) => !only || x.provider === only)
+                  .map((x) => x.org_id),
+              ),
+            ];
+            return { results: ids.map((id) => ({ id })) as T[] };
+          }
+          if (q.startsWith("SELECT id FROM orgs WHERE website_url IS NOT NULL AND website_url != ''")) {
+            return {
+              results: t.orgs.filter((x) => x.website_url).map((x) => ({ id: x.id })) as T[],
+            };
+          }
+
+          if (q.startsWith("SELECT status, COUNT(*) AS c FROM runs WHERE org_id = ?")) {
+            return { results: [] as T[] };
+          }
+          if (q.startsWith("SELECT ru.decision AS d FROM rulings ru JOIN runs r")) {
+            return { results: [] as T[] };
+          }
+          if (q.startsWith("SELECT id, org_id, title FROM goals WHERE status = 'active' AND datetime(created_at)")) {
+            const cutoff = Date.now() - 14 * 86400_000;
+            return {
+              results: t.goals.filter(
+                (x) => x.status === "active" && Date.parse(String(x.created_at)) < cutoff,
+              ) as T[],
+            };
+          }
           if (q.startsWith("SELECT id, role, email, hired, approved FROM seats WHERE team_id = ?")) {
             return { results: t.seats.filter((x) => x.team_id === p[0]) as T[] };
           }
@@ -631,6 +830,31 @@ export class FakeDB {
               mcp_tool: mcp_tool ?? null,
               mcp_args: mcp_args ?? null,
             });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE runs SET ")) {
+            const whereIdx = q.indexOf(" WHERE ");
+            const setClause = q.slice("UPDATE runs SET ".length, whereIdx);
+            const whereClause = q.slice(whereIdx);
+            const sets = setClause.split(", ");
+            const statusNeed = /AND status = '([^']+)'/.exec(whereClause)?.[1];
+            const row = t.runs.find((r) => r.id === p[p.length - 1]);
+            if (!row || (statusNeed !== undefined && row.status !== statusNeed)) {
+              return { meta: { changes: 0 } };
+            }
+            let i = 0;
+            for (const s of sets) {
+              const lit = /^(\w+) = '([^']*)'$/.exec(s);
+              if (lit) {
+                row[lit[1]] = lit[2];
+              } else if (s === "status = ?") row.status = p[i++];
+              else if (s === "lineup = ?") row.lineup = p[i++];
+              else if (s === "rounds_used = ?") row.rounds_used = p[i++];
+              else if (s === "tokens_used = tokens_used + ?") {
+                row.tokens_used = (row.tokens_used ?? 0) + p[i];
+                i++;
+              }
+            }
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("UPDATE approvals SET status = ?, decided_by = ?")) {
@@ -739,6 +963,25 @@ export class FakeDB {
             t.actions.push({ id: p[0], run_id: p[1], kind: p[2], target: p[3], payload: p[4], status: "done" });
             return { meta: { changes: 1 } };
           }
+          if (q.startsWith("UPDATE seat_credentials SET secret_enc = ?")) {
+            const scoped = q.includes("AND tool = ?");
+            const rows = t.seat_credentials.filter(
+              (x) => x.org_id === p[1] && x.seat_id === p[2] && (!scoped || x.tool === p[3]),
+            );
+            for (const r of rows) r.secret_enc = p[0];
+            return { meta: { changes: rows.length } };
+          }
+          if (q.startsWith("UPDATE actions SET target = ?, status = ?, payload = ?,")) {
+            const r = t.actions.find((x) => x.id === p[5]);
+            if (r) {
+              r.target = p[0];
+              r.status = p[1];
+              r.payload = p[2];
+              r.revert_payload = p[3] ?? null;
+              r.proof = p[4] ?? null;
+            }
+            return { meta: { changes: r ? 1 : 0 } };
+          }
           if (q.startsWith("UPDATE actions SET status = 'reverted' WHERE id = ?")) {
             const r = t.actions.find((x) => x.id === p[0]);
             if (r) r.status = "reverted";
@@ -838,11 +1081,6 @@ export class FakeDB {
           if (q.startsWith("UPDATE mcp_servers SET status = ?")) {
             const r = t.mcp_servers.find((x) => x.org_id === p[1] && x.id === p[2]);
             if (r) r.status = p[0];
-            return { meta: { changes: r ? 1 : 0 } };
-          }
-          if (q.startsWith("UPDATE mcp_servers SET spend_cap_cents = ?")) {
-            const r = t.mcp_servers.find((x) => x.org_id === p[1] && x.id === p[2]);
-            if (r) r.spend_cap_cents = p[0];
             return { meta: { changes: r ? 1 : 0 } };
           }
           if (q.startsWith("INSERT INTO mcp_credentials")) {
@@ -952,6 +1190,12 @@ export class FakeDB {
           }
           if (q.startsWith("INSERT INTO seat_requests")) {
             const [id, org_id, seat_id, tools_json, decided_by] = p as string[];
+            if (
+              q.includes("WHERE NOT EXISTS") &&
+              t.seat_requests.some((x) => x.seat_id === seat_id && x.status === "proposed")
+            ) {
+              return { meta: { changes: 0 } };
+            }
             const approved = q.includes("'approved'");
             t.seat_requests.push({
               id, org_id, seat_id, tools_json,
@@ -986,6 +1230,73 @@ export class FakeDB {
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO goal_events (goal_id, kind, title, detail)")) {
+            t.goal_events.push({
+              goal_id: p[0],
+              kind: p[1],
+              title: p[2],
+              detail: p[3],
+              created_at: new Date().toISOString(),
+            });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO slack_seen_events (event_id)")) {
+            if (t.slack_seen_events.some((r) => r.event_id === p[0])) {
+              return { meta: { changes: 0 } };
+            }
+            t.slack_seen_events.push({ event_id: p[0] });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM slack_seen_events WHERE")) {
+            return { meta: { changes: 0 } };
+          }
+          if (q.startsWith("INSERT INTO idea_spend (org_id, night, words)")) {
+            const row = t.idea_spend.find((r) => r.org_id === p[0] && r.night === p[1]);
+            if (row) row.words = (row.words ?? 0) + p[2];
+            else t.idea_spend.push({ org_id: p[0], night: p[1], words: p[2] });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO job_markers (job, value)")) {
+            const row = t.job_markers.find((r) => r.job === p[0]);
+            if (q.includes("DO UPDATE SET value")) {
+              if (row) row.value = p[1];
+              else t.job_markers.push({ job: p[0], value: p[1] });
+              return { meta: { changes: 1 } };
+            }
+            if (row) return { meta: { changes: 0 } };
+            t.job_markers.push({ job: p[0], value: p[1] });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO voice_spend (org_id, month, tokens)")) {
+            const month = new Date().toISOString().slice(0, 7);
+            const row = t.voice_spend.find((r) => r.org_id === p[0] && r.month === month);
+            if (row) row.tokens = (row.tokens ?? 0) + p[1];
+            else t.voice_spend.push({ org_id: p[0], month, tokens: p[1] });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO runs (id, org_id, team_id, goal_id, kind, goal, status)")) {
+            t.runs.push({
+              id: p[0], org_id: p[1], team_id: p[2], goal_id: p[3], kind: "check",
+              goal: p[4], status: "open", tokens_used: 0,
+            });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("UPDATE goals SET last_check_at = datetime('now')")) {
+            const row = t.goals.find((x) => x.id === p[0]);
+            if (!row) return { meta: { changes: 0 } };
+            if (row.last_check_at == null || String(row.last_check_at) < String(p[1])) {
+              row.last_check_at = new Date().toISOString().slice(0, 19).replace("T", " ");
+              return { meta: { changes: 1 } };
+            }
+            return { meta: { changes: 0 } };
+          }
+          if (q.startsWith("INSERT INTO runs (id, org_id, team_id, goal_id, kind, parent_run_id, goal,")) {
+            t.runs.push({
+              id: p[0], org_id: p[1], team_id: p[2], goal_id: p[3], kind: p[4],
+              parent_run_id: p[5], goal: p[6], metric_name: p[7], metric_baseline: p[8],
+              metric_target: p[9], timebox_days: p[10], vote_window_ms: p[11],
+              lineup: p[12], status: p[13], brief_note: p[14],
+              kill_flag: 0, rounds_used: 0, tokens_used: 0,
+            });
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO seat_milestones")) {
@@ -1083,9 +1394,35 @@ export class FakeDB {
             t.box_state = t.box_state.filter((x) => x.seat_id !== p[0]);
             return { meta: { changes: 1 } };
           }
+          if (q.startsWith("INSERT INTO memory_gather_state")) {
+            const row = t.memory_gather_state.find((x) => x.org_id === p[0] && x.source === p[1]);
+            const next = { org_id: p[0], source: p[1], cursor: p[2], chunks: p[3] };
+            if (row) Object.assign(row, next);
+            else t.memory_gather_state.push(next);
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO company_profile")) {
+            const fields = ["org_id", "icp", "offering", "customer_count", "employee_count", "help_center", "pricing", "tone", "competitors", "complaint_themes", "tools"];
+            const next: Record<string, unknown> = { updated_by: p[11] };
+            fields.forEach((f, i) => {
+              next[f] = p[i];
+            });
+            const row = t.company_profile.find((x) => x.org_id === p[0]);
+            if (row) Object.assign(row, next);
+            else t.company_profile.push(next);
+            return { meta: { changes: 1 } };
+          }
           if (q.startsWith("INSERT INTO tool_admin_grants")) {
             t.tool_admin_grants = t.tool_admin_grants.filter((x) => !(x.org_id === p[0] && x.tool === p[1]));
             t.tool_admin_grants.push({ org_id: p[0], tool: p[1], scopes_json: p[2], secret_enc: p[3], status: "granted" });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("INSERT INTO artifacts (id, run_id, kind, title, meta)")) {
+            t.artifacts.push({ id: p[0], run_id: p[1], kind: p[2], title: p[3], meta: p[4] });
+            return { meta: { changes: 1 } };
+          }
+          if (q.startsWith("DELETE FROM artifacts WHERE run_id = ? AND kind = 'baseline'")) {
+            t.artifacts = t.artifacts.filter((x) => !(x.run_id === p[0] && x.kind === "baseline"));
             return { meta: { changes: 1 } };
           }
           if (q.startsWith("INSERT INTO seat_mail")) {
@@ -1143,7 +1480,7 @@ export class FakeDB {
           }
           throw new Error(`FakeDB.run: unhandled: ${q.slice(0, 90)}`);
         },
-      }),
-    };
+      });
+    return { bind: (...p: unknown[]) => stmt(p), ...stmt([]) };
   }
 }

@@ -135,7 +135,12 @@ export function VoiceInput({
             await reader.cancel().catch(() => {});
             return;
           } else if (evt.type === "done" && evt.audioKey) {
-            const full = [...turns, partialRef.current].filter(Boolean).join(" ");
+            // Cumulative partials repeat earlier turns inside later text;
+            // keep only turns no later text already contains.
+            const parts = [...turns, partialRef.current].filter(Boolean);
+            const full = parts
+              .filter((p, i) => !parts.slice(i + 1).some((later) => later.includes(p)))
+              .join(" ");
             if (!full.trim()) {
               setError("Couldn't hear that one. Try again.");
               return;
@@ -145,6 +150,7 @@ export function VoiceInput({
           }
         }
       }
+      setError("The connection dropped before your words arrived. Try again.");
     } catch {
       setError("Couldn't send that recording. Try again.");
     } finally {

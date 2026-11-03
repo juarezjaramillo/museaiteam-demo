@@ -2,7 +2,7 @@ import { trialStatus, type TrialRow } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { audit } from "./db.js";
 import { runPropose } from "./agents.js";
-import { chargeIdea, ideaBudget } from "./allowance.js";
+import { chargeIdea, ideaBudget, tonight } from "./allowance.js";
 import { BadGoal, createGoal, getGoal } from "./goals.js";
 import type { McpServerRow } from "./mcp.js";
 import { recall } from "./memory.js";
@@ -163,7 +163,7 @@ async function holdProposal(env: Env, orgId: string, p: ProposalRow, reason: str
     .bind(p.id)
     .run();
   await notify(env, orgId, {
-    kind: "proposal.started",
+    kind: "proposal.held",
     title: `Held: ${p.title}`.slice(0, 120),
     body: `The team did not start this on its own: ${reason}.`,
     link: `proposal:${p.id}`,
@@ -218,7 +218,7 @@ async function draftIfIdle(env: Env, orgId: string): Promise<void> {
       .join("; "),
     memory: memory.map((m) => m.text),
   });
-  await chargeIdea(env, orgId, draft.tokens, "idle proposal");
+  await chargeIdea(env, orgId, draft.tokens, "idle proposal", `idle-proposal:${orgId}:${tonight()}`);
   if (draft.title.trim().length < 8) {
     await audit(env, null, "system", "proposal.dropped_short", { org: orgId });
     return;

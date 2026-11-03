@@ -1,7 +1,8 @@
 import type { Env } from "./bindings.js";
 import { audit, getRun } from "./db.js";
 import { approveAction, decidePreApproval } from "./approvals.js";
-import { executeRevert } from "./revert.js";
+import { RunNotTerminal, executeRevert } from "./revert.js";
+import { takeHit } from "./ratelimit.js";
 import { promoteQueued, settleAwaitingKill } from "./staffing.js";
 import { notify } from "./notify.js";
 import { recall } from "./memory.js";
@@ -39,7 +40,13 @@ export async function verifySlack(
   const hex = [...new Uint8Array(mac)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  return `v0=${hex}` === signature;
+  const want = `v0=${hex}`;
+  if (signature.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) {
+    diff |= want.charCodeAt(i) ^ signature.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 /** Claim an event id; retries return false so Slack retries never double-act. */
@@ -53,6 +60,15 @@ export async function claimEvent(env: Env, eventId: string): Promise<boolean> {
     "DELETE FROM slack_seen_events WHERE datetime(created_at) < datetime('now', '-1 day')",
   ).run();
   return (ins.meta.changes ?? 0) === 1;
+}
+
+/**
+ * Slack answers cost model calls and any member can trigger one:
+ * 60 answers per org per hour, then a polite pause. Commands
+ * (status, approve, undo, stop) never count against it.
+ */
+export async function slackAnswersThrottled(env: Env, orgId: string): Promise<boolean> {
+  return !(await takeHit(env, `slack-answers:${orgId}`, 60, 3600));
 }
 
 export async function orgForTeam(env: Env, teamId: string): Promise<string | null> {
@@ -131,6 +147,15 @@ async function answerMention(
   const threadTs = event.thread_ts ?? ts;
   const question = stripMention(event.text ?? "");
   if (!channel || !ts || !question) return;
+  if (await slackAnswersThrottled(env, orgId)) {
+    await replyToThread(
+      token,
+      channel,
+      threadTs,
+      "Give me a few minutes — I'm answering a lot right now.",
+    ).catch(() => {});
+    return;
+  }
   const [replies, memory, feedback] = await Promise.all([
     threadReplies(token, channel, threadTs).catch(() => []),
     recall(env, orgId, question).catch(() => []),
@@ -181,6 +206,10 @@ async function answerDM(
       return;
     default:
       break;
+  }
+  if (await slackAnswersThrottled(env, orgId)) {
+    await reply("Give me a few minutes — I'm answering a lot right now.").catch(() => {});
+    return;
   }
   const { kind } = await runTriage(env, text);
   if (kind === "brief") {
@@ -272,10 +301,15 @@ async function dmUndo(env: Env, orgId: string, prefix: string): Promise<string> 
   if (found.length === 0) return "No session starts with that.";
   if (found.length > 1) return "That matches more than one — add more letters.";
   await audit(env, found[0].id, "human", "revert.requested");
-  const result = await executeRevert(env, orgId, found[0].id);
-  return result.failed.length === 0
-    ? `Undone: ${result.reverted.length} taken back.`
-    : `Took back ${result.reverted.length}, ${result.failed.length} failed.`;
+  try {
+    const result = await executeRevert(env, orgId, found[0].id, { requireTerminal: true });
+    return result.failed.length === 0
+      ? `Undone: ${result.reverted.length} taken back.`
+      : `Took back ${result.reverted.length}, ${result.failed.length} failed.`;
+  } catch (err) {
+    if (err instanceof RunNotTerminal) return "That session is still running — stop it first, then undo.";
+    throw err;
+  }
 }
 
 async function dmStop(env: Env, orgId: string): Promise<string> {

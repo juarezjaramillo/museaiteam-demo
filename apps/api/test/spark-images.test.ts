@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Env } from "../src/bindings.js";
+import { generateImage } from "../src/images.js";
 import { SparkClient } from "../src/spark.js";
 
 const Schema = z.object({ ok: z.boolean() });
@@ -83,5 +84,48 @@ describe("chatWithImages", () => {
     expect(await keyFor([b])).not.toBe(keyA);
     expect(await keyFor(["data:image/png;base64,AQID"])).toBe(keyA);
     expect(await keyFor([a, b])).not.toBe(keyA);
+  });
+});
+
+describe("generateImage transport", () => {
+  const PNG_B64 = Buffer.from([137, 80, 78, 71]).toString("base64");
+  const imgOk = () =>
+    Response.json({ data: [{ b64_json: PNG_B64 }] });
+
+  it("a 503 then a 200 returns the image", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("warmup", { status: 503 }))
+      .mockResolvedValueOnce(imgOk());
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await generateImage(liveEnv(), {
+      prompt: "a bag",
+      size: "1080x1350",
+    });
+    expect([...out.png]).toEqual([137, 80, 78, 71]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a dropped connection then a 200 returns the image", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValueOnce(imgOk());
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await generateImage(liveEnv(), {
+      prompt: "a bag",
+      size: "1080x1350",
+    });
+    expect([...out.png]).toEqual([137, 80, 78, 71]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("three 500s throw", async () => {
+    const fetchMock = vi.fn(async () => new Response("bad", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      generateImage(liveEnv(), { prompt: "a bag", size: "1080x1350" }),
+    ).rejects.toThrow("Muse Image /images/generations: 500");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

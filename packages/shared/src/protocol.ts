@@ -18,7 +18,6 @@ export type AgentRole = z.infer<typeof AgentRole>;
 export const RunStatus = z.enum([
   "open",
   "queued",
-  "lineup_proposed",
   "debating",
   "ruled",
   "awaiting_approval",
@@ -120,4 +119,8 @@ export const FeedEvent = z.discriminatedUnion("type", [
 export type FeedEvent = z.infer<typeof FeedEvent>;
 
 export const MAX_DEBATE_ROUNDS = 3;
-export const VOTE_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Ballot breathing room between propose and rule. Short on purpose:
+ * no human voting exists yet, so this only lets the feed settle.
+ */
+export const VOTE_TIMEOUT_MS = 15_000;

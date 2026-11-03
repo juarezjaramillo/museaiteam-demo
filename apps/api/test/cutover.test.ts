@@ -44,13 +44,19 @@ describe("cutover", () => {
     expect(status.kept).toEqual(["slack"]);
   });
 
-  it("keeps links with unverified wanters, retires dead ones", async () => {
+  it("keeps links with unverified wanters", async () => {
     const { env: e, tables } = env();
     tables.oauth_tokens.push({ org_id: "org1", provider: "linear", access_token_enc: "x" });
     tables.seat_provisions.push({ seat_id: "s1", tool: "linear", step: "invite", status: "pending", detail: "", attempts: 0 });
     expect(await retireOrgLinkIfDone(e, "org1", "linear")).toBe("kept");
-    tables.seat_provisions.length = 0;
-    expect(await retireOrgLinkIfDone(e, "org1", "linear")).toBe("retired");
+    expect(tables.oauth_tokens).toHaveLength(1);
+  });
+
+  it("keeps links nobody provisioned: runs still borrow the org fallback", async () => {
+    const { env: e, tables } = env();
+    tables.oauth_tokens.push({ org_id: "org1", provider: "linear", access_token_enc: "x" });
+    expect(await retireOrgLinkIfDone(e, "org1", "linear")).toBe("kept");
+    expect(tables.oauth_tokens).toHaveLength(1);
   });
 
   it("retires server keys once bound seats hold their own", async () => {

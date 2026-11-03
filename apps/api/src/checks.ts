@@ -21,6 +21,7 @@ import {
 } from "./goals.js";
 import { notify } from "./notify.js";
 import { pullGoalMetric } from "./pulls.js";
+import { todayBriefText } from "./teams.js";
 import { RunConflict, RunThrottled, createWorkRun } from "./staffing.js";
 
 function parseSqliteTs(s: string | null): number | null {
@@ -43,6 +44,7 @@ interface DueGoal {
   schedule: string;
   status: string;
   last_check_at: string | null;
+  brief_note: string | null;
 }
 
 /**
@@ -135,7 +137,10 @@ async function evaluateOwnership(
   if (!verdict.fired) return "fallthrough";
   if (await triggerCoolingDown(env, goal.id)) {
     await audit(env, checkRunId, "system", "trigger.cooldown", { goal: goal.id });
-    return "fallthrough";
+    await addEvent(env, goal.id, "check.monitoring", "Metric still firing — resting 24h after the last trigger session", {
+      runId: checkRunId,
+    });
+    return "handled";
   }
   const budget = await ideaBudget(env, goal.org_id);
   if (budget.left <= 0) {
@@ -185,6 +190,7 @@ async function evaluateOwnership(
     return "handled";
   }
   try {
+    const teamBrief = goal.team_id ? await todayBriefText(env, goal.org_id, goal.team_id) : "";
     const created = await createWorkRun(env, {
       orgId: goal.org_id,
       goalId: goal.id,
@@ -193,7 +199,10 @@ async function evaluateOwnership(
       metricBaseline: goal.metric_baseline ?? undefined,
       metricTarget: goal.metric_target ?? undefined,
       kind: "trigger",
-      briefNote: brief,
+      briefNote: [brief, goal.brief_note, teamBrief]
+        .map((s) => (s ?? "").trim())
+        .filter(Boolean)
+        .join("\n\n"),
     });
     await addEvent(env, goal.id, "check.triggered", brief, {
       runId: created.runId,
@@ -360,7 +369,7 @@ export async function tickGoals(env: Env): Promise<void> {
   const rows = await env.DB.prepare(
     `SELECT id, org_id, team_id, title, metric_name, metric_source,
       metric_baseline, metric_target, approval_mode, deadline, schedule,
-      status, last_check_at
+      status, last_check_at, brief_note
      FROM goals WHERE status IN ('active', 'overdue') AND schedule != 'manual'`,
   ).all<DueGoal>();
   for (const goal of rows.results ?? []) {
@@ -422,16 +431,25 @@ export async function tickStalled(env: Env): Promise<void> {
         .first<{ id: string }>();
       if (recent) continue;
       const first = await env.DB.prepare(
-        "SELECT value FROM metric_points WHERE goal_id = ? ORDER BY rowid ASC LIMIT 1",
+        `SELECT value FROM metric_points WHERE goal_id = ?
+         AND datetime(ts) > datetime('now', '-14 days') ORDER BY rowid ASC LIMIT 1`,
       )
         .bind(g.id)
         .first<{ value: number }>();
       const last = await env.DB.prepare(
-        "SELECT value FROM metric_points WHERE goal_id = ? ORDER BY rowid DESC LIMIT 1",
+        `SELECT value FROM metric_points WHERE goal_id = ?
+         AND datetime(ts) > datetime('now', '-14 days') ORDER BY rowid DESC LIMIT 1`,
+      )
+        .bind(g.id)
+        .first<{ value: number }>();
+      const before = await env.DB.prepare(
+        `SELECT value FROM metric_points WHERE goal_id = ?
+         AND datetime(ts) <= datetime('now', '-14 days') ORDER BY rowid DESC LIMIT 1`,
       )
         .bind(g.id)
         .first<{ value: number }>();
       if (first && last && first.value !== last.value) continue;
+      if (last && before && before.value !== last.value) continue;
       await addEvent(env, g.id, "goal.stalled", "Number unmoved for 14 days", {});
       await notify(env, g.org_id, {
         kind: "goal.stalled",

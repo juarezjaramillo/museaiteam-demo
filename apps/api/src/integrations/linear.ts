@@ -1,9 +1,11 @@
+import { providerFetch } from "./http.js";
+
 async function gql<T>(
   token: string,
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<T> {
-  const res = await fetch("https://api.linear.app/graphql", {
+  const res = await providerFetch("Linear", "https://api.linear.app/graphql", {
     method: "POST",
     headers: {
       authorization: token,
@@ -158,6 +160,28 @@ export async function transitionIssue(
     throw new Error(`Linear issueUpdate failed for ${issueId}`);
   }
   return match.name;
+}
+
+export interface LinearIssueSummary {
+  id: string;
+  title: string;
+  description: string;
+  updatedAt: string;
+}
+
+/** Newest-first issues for the memory bank; caller filters by cursor. */
+export async function listRecentIssues(token: string, limit = 50): Promise<LinearIssueSummary[]> {
+  const data = await gql<{ issues: { nodes: LinearIssueSummary[] } }>(
+    token,
+    `query($n: Int!) { issues(first: $n, orderBy: updatedAt) { nodes { id title description updatedAt } } }`,
+    { n: Math.min(Math.max(limit, 1), 50) },
+  );
+  return (data.issues?.nodes ?? []).map((i) => ({
+    id: String(i.id ?? ""),
+    title: String(i.title ?? "(no title)").slice(0, 140),
+    description: String(i.description ?? "").slice(0, 2000),
+    updatedAt: String(i.updatedAt ?? ""),
+  }));
 }
 
 export async function deleteIssue(token: string, id: string): Promise<void> {

@@ -15,8 +15,10 @@ import { BoxQuota, boxConfigured, provider } from "./box.js";
 import { retireOrgLinkIfDone } from "./cutover.js";
 import { audit } from "./db.js";
 import { maybeStartSessionOne } from "./enroll.js";
+import { authTest as slackAuthTest } from "./integrations/slack.js";
 import { notify } from "./notify.js";
 import { getSeat, listSeatMail } from "./seat-mail.js";
+import { seatToken } from "./seat-creds.js";
 import { trialGate } from "./trial.js";
 
 export type ProvisionStrategy = "api" | "browser" | "manual";
@@ -148,10 +150,28 @@ export async function seatAskLines(env: Env, seatId: string): Promise<string[]> 
   return lines;
 }
 
+export function parseToolList(json: string): string[] {
+  try {
+    const arr = JSON.parse(json) as unknown;
+    return Array.isArray(arr) ? arr.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergeAskTools(currentJson: string, fresh: string[]): string[] {
+  return [...new Set([...parseToolList(currentJson), ...fresh])].slice(0, 20);
+}
+
+const OPEN_ASK_SQL =
+  "SELECT id, tools_json FROM seat_requests WHERE seat_id = ? AND status = 'proposed' LIMIT 1";
+
 /**
  * The hire asks for seats mid-work: files once per tool (merging into
  * the open card), notifies once per new tool. Returns what was filed —
  * empty means everything was already covered, never an error.
+ * Concurrent asks single-flight through an atomic insert: exactly one
+ * card appears, losers merge into it.
  */
 export async function askForSeats(
   env: Env,
@@ -163,22 +183,14 @@ export async function askForSeats(
   const seat = await getSeat(env, orgId, seatId);
   if (!seat) throw new Error("seat not found");
   const fresh = await uncoveredTools(env, seatId, normalizeTools(tools));
-  const open = await env.DB.prepare(
-    "SELECT id, tools_json FROM seat_requests WHERE seat_id = ? AND status = 'proposed' LIMIT 1",
-  )
+  const open = await env.DB.prepare(OPEN_ASK_SQL)
     .bind(seatId)
     .first<{ id: string; tools_json: string }>();
   if (fresh.length === 0) return { requestId: open?.id ?? null, filed: [] };
   let requestId: string;
   let merged: string[];
   if (open) {
-    let current: string[] = [];
-    try {
-      current = (JSON.parse(open.tools_json) as unknown[]).filter((t): t is string => typeof t === "string");
-    } catch {
-      current = [];
-    }
-    merged = [...new Set([...current, ...fresh])].slice(0, 20);
+    merged = mergeAskTools(open.tools_json, fresh);
     await env.DB.prepare("UPDATE seat_requests SET tools_json = ?, nudged_at = NULL WHERE id = ?")
       .bind(JSON.stringify(merged), open.id)
       .run();
@@ -186,11 +198,33 @@ export async function askForSeats(
   } else {
     requestId = crypto.randomUUID();
     merged = fresh;
-    await env.DB.prepare(
-      "INSERT INTO seat_requests (id, org_id, seat_id, tools_json, status) VALUES (?, ?, ?, ?, 'proposed')",
+    const ins = await env.DB.prepare(
+      `INSERT INTO seat_requests (id, org_id, seat_id, tools_json, status)
+       SELECT ?, ?, ?, ?, 'proposed' WHERE NOT EXISTS (
+         SELECT 1 FROM seat_requests WHERE seat_id = ? AND status = 'proposed')`,
     )
-      .bind(requestId, orgId, seatId, JSON.stringify(merged))
+      .bind(requestId, orgId, seatId, JSON.stringify(merged), seatId)
       .run();
+    if ((ins.meta.changes ?? 0) === 0) {
+      // Lost the race: merge into the card that just appeared. If it
+      // was decided in between, re-file cleanly.
+      const raced = await env.DB.prepare(OPEN_ASK_SQL)
+        .bind(seatId)
+        .first<{ id: string; tools_json: string }>();
+      if (raced) {
+        merged = mergeAskTools(raced.tools_json, fresh);
+        await env.DB.prepare("UPDATE seat_requests SET tools_json = ?, nudged_at = NULL WHERE id = ?")
+          .bind(JSON.stringify(merged), raced.id)
+          .run();
+        requestId = raced.id;
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO seat_requests (id, org_id, seat_id, tools_json, status) VALUES (?, ?, ?, ?, 'proposed')",
+        )
+          .bind(requestId, orgId, seatId, JSON.stringify(merged))
+          .run();
+      }
+    }
   }
   const paid = paidTools(merged);
   await notify(env, orgId, {
@@ -255,7 +289,7 @@ export async function requestSeats(
     .bind(seatId)
     .first<{ id: string; tools_json: string; status: string; created_at: string }>();
   if (open) {
-    return { id: open.id, seat_id: seatId, tools: JSON.parse(open.tools_json) as string[], status: open.status, created_at: open.created_at };
+    return { id: open.id, seat_id: seatId, tools: parseToolList(open.tools_json), status: open.status, created_at: open.created_at };
   }
   const { tools } = await seatMapFor(env, orgId, seat.role);
   const verified = await env.DB.prepare(
@@ -296,7 +330,7 @@ export async function decideSeatRequest(
     .first<{ id: string; seat_id: string; tools_json: string; status: string }>();
   if (!row) return "notfound";
   if (row.status !== "proposed") return "decided";
-  const tools = JSON.parse(row.tools_json) as string[];
+  const tools = parseToolList(row.tools_json);
   const excluded = new Set(normalizeTools(exclude));
   const approved = tools.filter((t) => !excluded.has(t));
   if (approve && approved.length === 0) approve = false;
@@ -361,6 +395,19 @@ export async function saveAdminGrant(
   scopes: string[],
   secret: string,
 ): Promise<void> {
+  if (typeof tool !== "string" || tool.trim().length === 0 || tool.length > 120) {
+    throw new Error("tool must be 1-120 characters");
+  }
+  if (typeof secret !== "string" || secret.length === 0 || secret.length > 4000) {
+    throw new Error("secret must be 1-4000 characters");
+  }
+  if (
+    !Array.isArray(scopes) ||
+    scopes.length > 50 ||
+    !scopes.every((s) => typeof s === "string" && s.length <= 120)
+  ) {
+    throw new Error("scopes must be at most 50 strings of 120 characters");
+  }
   const key = keyFromHex(env.TOKEN_ENC_KEY);
   await env.DB.prepare(
     `INSERT INTO tool_admin_grants (org_id, tool, scopes_json, secret_enc, status, updated_at)
@@ -413,9 +460,11 @@ async function setProvision(
 }
 
 /**
- * GitHub org invite via API. Needs the hire's GitHub username — which
- * only exists after the hire creates its account (box browser). Until
- * then the step waits honestly instead of failing.
+ * STUB: GitHub org invite via API. The invite call itself
+ * (`POST /orgs/{org}/invitations`) is not wired yet: it needs the
+ * hire's GitHub username — which only exists after the hire creates
+ * its account (box browser) — plus the org name. Until both are
+ * known the step waits honestly instead of failing.
  */
 async function provisionGithub(
   env: Env,
@@ -431,6 +480,46 @@ async function provisionGithub(
   // GitHub invites by username, not email: without the hire's username
   // (minted at account creation) there is nothing to call yet.
   await setProvision(env, seatId, "github", "invite", "waiting", "waiting on the hire's GitHub username");
+}
+
+/** Where each tool's invite links live. The hire's browser only ever
+ * opens these hosts for that tool — a phishing mail or another
+ * tool's invite in the same inbox never diverts it. */
+const INVITE_HOSTS: Record<string, string[]> = {
+  github: ["github.com"],
+  linear: ["linear.app"],
+  slack: ["slack.com"],
+  notion: ["notion.so", "notion.site"],
+  hubspot: ["hubspot.com", "app.hubspot.com"],
+  figma: ["figma.com"],
+};
+
+function hostMatches(url: string, hosts: string[]): boolean {
+  let host = "";
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return hosts.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
+/**
+ * The invite link for a tool: the newest mail linking to that tool's
+ * own hosts. Tools without a known host keep the legacy first-URL
+ * behavior.
+ */
+export function inviteUrlFor(
+  tool: string,
+  mail: Array<{ subject: string; body: string }>,
+): string | null {
+  const hosts = INVITE_HOSTS[tool];
+  for (const m of mail) {
+    const url = firstUrl(`${m.subject}\n${m.body}`);
+    if (!url) continue;
+    if (!hosts || hostMatches(url, hosts)) return url;
+  }
+  return null;
 }
 
 /**
@@ -451,7 +540,7 @@ async function attemptBrowserProvision(
     return;
   }
   const mail = await listSeatMail(env, orgId, seatId, false);
-  const url = mail.map((m) => firstUrl(`${m.subject}\n${m.body}`)).find((u) => u);
+  const url = inviteUrlFor(tool, mail);
   if (!url) {
     await setProvision(env, seatId, tool, "invite", "pending", "waiting for the invite email");
     return;
@@ -500,7 +589,7 @@ export async function tickProvisions(env: Env): Promise<number> {
      FROM seat_provisions p
      JOIN seats s ON s.id = p.seat_id
      JOIN teams t ON t.id = s.team_id
-     WHERE p.status IN ('pending', 'waiting') AND s.frozen_at IS NULL LIMIT 50`,
+     WHERE p.status = 'pending' AND s.frozen_at IS NULL LIMIT 50`,
   )
     .bind()
     .all<ProvisionRow & { org_id: string; email: string | null; role: string; attempts: number }>();
@@ -524,9 +613,64 @@ export async function tickProvisions(env: Env): Promise<number> {
   return acted;
 }
 
+const VERIFY_TIMEOUT_MS = 10_000;
+
+/**
+ * A cheap read call proving the hire's token works. Tools without a
+ * known check stay unverified — they verify at first box use instead.
+ */
+async function checkVendorToken(tool: string, token: string): Promise<boolean> {
+  const signal = AbortSignal.timeout(VERIFY_TIMEOUT_MS);
+  try {
+    switch (tool) {
+      case "github": {
+        const res = await fetch("https://api.github.com/user", {
+          headers: { authorization: `Bearer ${token}`, "user-agent": "museaiteam-verify" },
+          signal,
+        });
+        return res.ok;
+      }
+      case "slack": {
+        await slackAuthTest(token);
+        return true;
+      }
+      case "linear": {
+        const res = await fetch("https://api.linear.app/graphql", {
+          method: "POST",
+          headers: { authorization: token, "content-type": "application/json" },
+          body: JSON.stringify({ query: "{ viewer { id } }" }),
+          signal,
+        });
+        if (!res.ok) return false;
+        const json = (await res.json()) as { data?: { viewer?: { id?: string } } };
+        return Boolean(json.data?.viewer?.id);
+      }
+      case "notion": {
+        const res = await fetch("https://api.notion.com/v1/users/me", {
+          headers: { authorization: `Bearer ${token}`, "notion-version": "2022-06-28" },
+          signal,
+        });
+        return res.ok;
+      }
+      case "hubspot": {
+        const res = await fetch(
+          `https://api.hubapi.com/oauth/v1/access-tokens/${encodeURIComponent(token)}`,
+          { signal },
+        );
+        return res.ok;
+      }
+      default:
+        return false;
+    }
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Verify a seat tool with a read call as the hire, then mark verified.
- * Only token-backed tools verify today; the rest verify at first box use.
+ * Only token-backed tools with a known vendor check verify today; the
+ * rest verify at first box use.
  */
 export async function verifySeatTool(
   env: Env,
@@ -534,12 +678,9 @@ export async function verifySeatTool(
   seatId: string,
   tool: string,
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    "SELECT kind, status FROM seat_credentials WHERE org_id = ? AND seat_id = ? AND tool = ?",
-  )
-    .bind(orgId, seatId, tool)
-    .first<{ kind: string; status: string }>();
-  if (!row || row.kind !== "token" || row.status !== "ok") return false;
+  const token = await seatToken(env, orgId, seatId, tool);
+  if (!token) return false;
+  if (!(await checkVendorToken(tool, token))) return false;
   await env.DB.prepare(
     `INSERT INTO seat_provisions (seat_id, tool, step, status) VALUES (?, ?, 'verify', 'verified')
      ON CONFLICT(seat_id, tool) DO UPDATE SET step = 'verify', status = 'verified', updated_at = datetime('now')`,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { decryptFromB64, encryptToB64, keyFromHex } from "@museaiteam/shared";
 import type { Env } from "../src/bindings.js";
 import {
   bindSeatTool,
@@ -8,6 +9,7 @@ import {
   seatForRole,
   seatReadyForServer,
   seatSession,
+  seatToken,
   setSeatCredential,
   unbindSeatTool,
   wipeSeatCredentials,
@@ -115,5 +117,46 @@ describe("seat credentials", () => {
     expect(await seatReadyForServer(e, "org1", "s-eng", "a")).toBe(false);
     await setSeatCredential(e, "org1", "s-eng", { tool: "mcp:a", kind: "token", secret: "k" });
     expect(await seatReadyForServer(e, "org1", "s-eng", "a")).toBe(true);
+  });
+});
+
+describe("key rotation", () => {
+  const OLD = "cd".repeat(32);
+  const NEW = "ab".repeat(32);
+
+  it("rewraps only the login being read, never its siblings", async () => {
+    const tables = blankTables();
+    tables.teams.push({ id: "t1", org_id: "org1" });
+    tables.seats.push({ id: "s-eng", team_id: "t1", role: "engineer", approved: 1 });
+    const oldKey = keyFromHex(OLD);
+    for (const [tool, secret] of [
+      ["github", "ghp-seat"],
+      ["slack", "xoxb-seat"],
+    ] as const) {
+      tables.seat_credentials.push({
+        id: `cred-${tool}`,
+        org_id: "org1",
+        seat_id: "s-eng",
+        tool,
+        kind: "token",
+        secret_enc: await encryptToB64(oldKey, secret),
+        status: "ok",
+      });
+    }
+    const e = {
+      DB: new FakeDB(tables),
+      TOKEN_ENC_KEY: NEW,
+      TOKEN_ENC_KEY_PREV: OLD,
+    } as unknown as Env;
+
+    expect(await seatToken(e, "org1", "s-eng", "github")).toBe("ghp-seat");
+
+    const newKey = keyFromHex(NEW);
+    const github = tables.seat_credentials.find((r) => r.tool === "github");
+    const slack = tables.seat_credentials.find((r) => r.tool === "slack");
+    // The read login migrated to the new key...
+    expect(await decryptFromB64(newKey, String(github?.secret_enc))).toBe("ghp-seat");
+    // ...while its sibling still reads under the old one.
+    expect(await decryptFromB64(oldKey, String(slack?.secret_enc))).toBe("xoxb-seat");
   });
 });

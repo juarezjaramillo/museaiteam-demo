@@ -24,7 +24,7 @@ import {
 import type { Env } from "./bindings.js";
 import { autoReviewRun, requestToolApproval, runGate } from "./approvals.js";
 import { maybeSendFairUseAlert } from "./billing.js";
-import { audit, checkLiveness, getRun, touchRun } from "./db.js";
+import { addRunTokens, audit, checkLiveness, getRun, goalWithBrief, touchRun } from "./db.js";
 import { notify } from "./notify.js";
 import { approvedPlaybook } from "./learning.js";
 import { sendRunDigest } from "./digest.js";
@@ -168,9 +168,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     const playbook = await approvedPlaybook(this.env, run.org_id).catch(() => []);
     const history = await this.goalHistory(run.goal_id, runId);
     const ctx: GoalContext = {
-      goal: run.brief_note
-        ? `${run.goal}\n\nFounder brief: ${run.brief_note}`
-        : run.goal,
+      goal: goalWithBrief(run.goal, run.brief_note),
       metricLine: metricLineFor({
         metric_name: run.metric_name,
         metric_baseline: run.metric_baseline,
@@ -448,7 +446,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
         .map((t) => `${t.role}: ${t.fors} for / ${t.againsts} against`)
         .join("; ");
       const ctx: GoalContext = {
-        goal: run.goal,
+        goal: goalWithBrief(run.goal, run.brief_note),
         metricLine: metricLineFor({
           metric_name: run.metric_name,
           metric_baseline: run.metric_baseline,
@@ -517,11 +515,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
   }
 
   private async addTokens(runId: string, n: number): Promise<void> {
-    if (!n) return;
-    const run = await getRun(this.env, runId);
-    await touchRun(this.env, runId, {
-      tokens_used: (run?.tokens_used ?? 0) + n,
-    });
+    await addRunTokens(this.env, runId, n);
   }
 
   private async recordAction(
@@ -561,6 +555,41 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     const { revertPayload: _omit, ...feedAction } = action;
     await publishEvent(this.env, runId, { type: "action", action: feedAction });
     return action.id;
+  }
+
+  /** Rewrite a pending intent row in place, proof rebuilt, feed updated. */
+  private async updateActionRow(
+    runId: string,
+    actionId: string,
+    target: string,
+    status: Action["status"],
+    payload: Record<string, unknown>,
+    revertPayload?: Record<string, unknown>,
+  ): Promise<void> {
+    const row = await this.env.DB.prepare(
+      "SELECT kind, target FROM actions WHERE id = ? AND run_id = ?",
+    )
+      .bind(actionId, runId)
+      .first<{ kind: Action["kind"]; target: string }>();
+    if (!row) return;
+    const proof = buildProof(row.kind, target, status, actionLabel(row.kind), revertPayload, payload);
+    await this.env.DB.prepare(
+      `UPDATE actions SET target = ?, status = ?, payload = ?,
+        revert_payload = ?, proof = ? WHERE id = ?`,
+    )
+      .bind(
+        target,
+        status,
+        JSON.stringify(payload),
+        revertPayload ? JSON.stringify(revertPayload) : null,
+        proof ? JSON.stringify(proof) : null,
+        actionId,
+      )
+      .run();
+    await publishEvent(this.env, runId, {
+      type: "action",
+      action: { id: actionId, runId, kind: row.kind, target, payload, status },
+    });
   }
 
   /** Done action kinds for a run: the resume-not-replay guard. */
@@ -842,10 +871,18 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       if ((await checkGuard(this.env, orgId, "pm", "linear", "comment")).allowed) {
         await commentOnIssue(token, payload.issueId, summary);
       }
-      if ((await checkGuard(this.env, orgId, "pm", "linear", "transition")).allowed) {
-        await transitionIssue(token, payload.teamId, payload.issueId, "completed");
-      }
+      // The comment is the closeout: mark it before the transition so a
+      // retry never posts twice. The transition is best-effort after that.
       await this.recordAction(runId, "linear.manage_issue", "closeout:linear", "done");
+      if ((await checkGuard(this.env, orgId, "pm", "linear", "transition")).allowed) {
+        await transitionIssue(token, payload.teamId, payload.issueId, "completed").catch(
+          async (transitionErr) => {
+            await audit(this.env, runId, "pm", "closeout.transition_failed", {
+              error: String(transitionErr).slice(0, 200),
+            });
+          },
+        );
+      }
     } catch (err) {
       await this.recordAction(runId, "linear.manage_issue", "closeout", "failed", undefined, {
         reason: String(err).slice(0, 200),
@@ -963,16 +1000,25 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     if (!token) return;
     try {
       const ts = await replyToThread(token, payload.channel, payload.ts, summary);
-      const replies = [...(payload.replies ?? []), ts];
-      await this.env.DB.prepare("UPDATE actions SET revert_payload = ? WHERE id = ?")
-        .bind(JSON.stringify({ ...payload, replies }), row.id)
-        .run();
-      await this.env.DB.prepare(
-        "UPDATE actions SET kind = 'slack.thread_update' WHERE id = ? AND kind = 'slack.post_message'",
-      )
-        .bind(row.id)
-        .run();
+      // The reply is the closeout: mark it before the bookkeeping so a
+      // retry never posts twice. Bookkeeping failures only cost the
+      // revert trail for this reply, and are audited.
       await this.recordAction(runId, "slack.thread_update", "closeout:slack", "done");
+      const replies = [...(payload.replies ?? []), ts];
+      try {
+        await this.env.DB.prepare("UPDATE actions SET revert_payload = ? WHERE id = ?")
+          .bind(JSON.stringify({ ...payload, replies }), row.id)
+          .run();
+        await this.env.DB.prepare(
+          "UPDATE actions SET kind = 'slack.thread_update' WHERE id = ? AND kind = 'slack.post_message'",
+        )
+          .bind(row.id)
+          .run();
+      } catch (bookErr) {
+        await audit(this.env, runId, "marketer", "closeout.bookkeeping_failed", {
+          error: String(bookErr).slice(0, 200),
+        });
+      }
     } catch (err) {
       await this.recordAction(runId, "slack.thread_update", "closeout", "failed", undefined, {
         reason: String(err).slice(0, 200),
@@ -1094,6 +1140,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       hooks: {
         recordAction: (kind, target, status, revertPayload, payload, actionId) =>
           this.recordAction(runId, kind, target, status, revertPayload, payload ?? {}, actionId),
+        updateAction: (actionId, target, status, payload, revertPayload) =>
+          this.updateActionRow(runId, actionId, target, status, payload ?? {}, revertPayload),
         addTokens: (n) => this.addTokens(runId, n),
       },
     });
@@ -1333,6 +1381,16 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     }
   }
 
+  /**
+   * Kill takes effect between acts: a dead run stops before its next
+   * write instead of shipping everything and halting at review.
+   */
+  private async stoppedBetweenActs(runId: string): Promise<StepOutcome | null> {
+    const { liveness } = await checkLiveness(this.env, runId, MAX_DEBATE_ROUNDS);
+    if (liveness === "alive") return null;
+    return liveness === "halted" ? "halted" : "failed";
+  }
+
   private async actBody(runId: string): Promise<StepOutcome> {
     const { liveness, run } = await checkLiveness(
       this.env,
@@ -1370,7 +1428,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
       const plan = [
         `# ${ruling.decision}`,
         "",
-        `Goal: ${run.goal}`,
+        `Goal: ${goalWithBrief(run.goal, run.brief_note)}`,
         `Decided by: ${ruling.decided_by}`,
         "",
         ruling.rationale,
@@ -1387,6 +1445,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           plan,
         );
       }
+      let stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
       if (!doneKinds.has("linear.manage_issue") && !doneKinds.has("linear.create_issue")) {
         await this.linearAction(
           run.org_id,
@@ -1397,6 +1457,8 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           ruling.rationale,
         );
       }
+      stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
       if (!doneKinds.has("slack.thread_update") && !doneKinds.has("slack.post_message")) {
         await this.slackAction(
           run.org_id,
@@ -1404,15 +1466,21 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           `Team decision (${ruling.decided_by}): ${ruling.decision}\nGoal: ${run.goal}`,
         );
       }
+      stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
       // Shopify and HubSpot ship two writes each; per-write guards live
       // inside the methods so a partial retry resumes instead of duping.
       await this.shopifyAction(run.org_id, runId, run.goal, ruling.decision, short);
+      stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
       await this.hubspotAction(
         run.org_id,
         runId,
         `Team decision (${ruling.decided_by}): ${ruling.decision}\nGoal: ${run.goal}\n\n${ruling.rationale}`,
         ruling.decision,
       );
+      stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
       if (!doneKinds.has("notion.run_page") && !doneKinds.has("notion.create_page")) {
         await this.notionAction(
           run.org_id,
@@ -1429,11 +1497,22 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           ],
         );
       }
+      stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
       if (!doneKinds.has("creative.campaign_image")) {
         await this.creativeAction(run.org_id, runId, run.goal, ruling.decision);
       }
+      stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
       await this.runCloseouts(runId, run.org_id, ruling.decision);
-      await this.mcpLoopAction(run.org_id, runId, run.goal, ruling.decision);
+      stopped = await this.stoppedBetweenActs(runId);
+      if (stopped) return stopped;
+      await this.mcpLoopAction(
+        run.org_id,
+        runId,
+        goalWithBrief(run.goal, run.brief_note),
+        ruling.decision,
+      );
     } else {
       await audit(this.env, runId, "workflow", "action.skipped", {
         reason: "no ruling recorded",
@@ -1638,7 +1717,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
           return;
         }
         try {
-          const result = await callTool(this.env, found.server, tool.name, args, loopSeat);
+          const result = await callTool(this.env, found.server, tool.name, args, loopSeat, false, { runId });
           executed++;
           await this.recordAction(runId, "mcp.tool", mcpCallLabel(found.server.name, tool.name), "done", undefined, {
             server: found.server.name,
@@ -1790,7 +1869,7 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     let review: { verdict: "pass" | "fail"; note: string; metricTouched: string[]; tokens: number };
     try {
       review = await runPeerReview(this.env, {
-        goal: run.goal,
+        goal: goalWithBrief(run.goal, run.brief_note),
         decision: ruling?.decision ?? "(none)",
         actions: lines,
       });
@@ -1972,7 +2051,13 @@ export class GoalRunWorkflow extends WorkflowEntrypoint<Env, GoalRunParams> {
     const run = await getRun(this.env, runId);
     // Trigger sessions spend the nightly idea budget, settled once here.
     if (run && run.kind === "trigger" && run.tokens_used > 0) {
-      await chargeIdea(this.env, run.org_id, run.tokens_used, run.goal.slice(0, 80)).catch(
+      await chargeIdea(
+        this.env,
+        run.org_id,
+        run.tokens_used,
+        run.goal.slice(0, 80),
+        `idea-charge:${runId}`,
+      ).catch(
         (err) =>
           audit(this.env, runId, "workflow", "trigger.charge_failed", {
             message: String(err),

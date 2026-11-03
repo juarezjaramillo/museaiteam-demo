@@ -5,6 +5,18 @@ export interface GuardVerdict {
   reason: string;
 }
 
+/** A guardrail list column: string array, or null when corrupt. */
+export function parseStringList(json: string): string[] | null {
+  try {
+    const arr = JSON.parse(json) as unknown;
+    return Array.isArray(arr) && arr.every((t): t is string => typeof t === "string")
+      ? [...arr]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Unconfigured workers inherit the wide-open demo defaults. */
 export async function checkGuard(
   env: Env,
@@ -19,8 +31,11 @@ export async function checkGuard(
     .bind(orgId, workerRole)
     .first<{ systems: string; write_scope: string }>();
   if (!row) return { allowed: true, reason: "default-open" };
-  const systems = JSON.parse(row.systems) as string[];
-  const scope = JSON.parse(row.write_scope) as string[];
+  const systems = parseStringList(row.systems);
+  const scope = parseStringList(row.write_scope);
+  if (!systems || !scope) {
+    return { allowed: false, reason: "guardrail misconfigured — fix it in Setup" };
+  }
   if (!systems.includes(system)) {
     return { allowed: false, reason: `${workerRole} may not touch ${system}` };
   }

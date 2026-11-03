@@ -516,15 +516,15 @@ export async function prepareProviderConfig(
   const merged: Record<string, unknown> = { ...existing, ...incoming };
   if ("storePassword" in incoming) {
     const pw = incoming.storePassword;
-    if (
-      provider !== "shopify" ||
-      typeof pw !== "string" ||
-      !pw.trim() ||
-      pw.length > 200
-    ) {
-      throw new BadProviderConfig("config.storePassword must be a 1-200 char string");
+    if (provider !== "shopify" || typeof pw !== "string" || pw.length > 200) {
+      throw new BadProviderConfig("config.storePassword must be a 0-200 char string");
     }
-    merged.storePasswordEnc = await encryptToB64(keyFromHex(env.TOKEN_ENC_KEY), pw);
+    // Empty clears a saved password; anything else encrypts over it.
+    if (!pw.trim()) {
+      delete merged.storePasswordEnc;
+    } else {
+      merged.storePasswordEnc = await encryptToB64(keyFromHex(env.TOKEN_ENC_KEY), pw);
+    }
   }
   delete merged.storePassword;
   return merged;

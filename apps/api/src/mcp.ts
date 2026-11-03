@@ -13,8 +13,9 @@ import {
 } from "@museaiteam/shared";
 import type { Env } from "./bindings.js";
 import { BoxOffline, provider as boxProvider } from "./box.js";
-import { OrgRetired, audit, orgCutOver } from "./db.js";
+import { OrgRetired, addRunTokens, audit, orgCutOver } from "./db.js";
 import { advertisesOAuth, oauthAccess, refreshOAuth } from "./mcp-oauth.js";
+import { assertPublicHttpUrl as checkPublicHttpUrl } from "./integrations/http.js";
 import { seatToken, seatToolIds } from "./seat-creds.js";
 
 export interface McpServerRow {
@@ -26,11 +27,24 @@ export interface McpServerRow {
   auth_name: string;
   source: string;
   status: string;
+  /** Legacy column, never read: MCP spend meters into run fair-use, with no cap. */
   spend_cap_cents: number;
   box_argv: string;
 }
 
 /** Box-local servers live in the hire's box, not at a URL: `box:<name>`. */
+/**
+ * Server URLs are fetched from our own edge, so they must be public
+ * http(s). Same check as everywhere; McpError keeps the route's 400.
+ */
+export function assertPublicHttpUrl(url: string): void {
+  try {
+    checkPublicHttpUrl(url);
+  } catch (err) {
+    throw new McpError("protocol", err instanceof Error ? err.message : String(err));
+  }
+}
+
 export function isBoxServer(server: McpServerRow): boolean {
   return server.url.startsWith("box:");
 }
@@ -324,6 +338,22 @@ function extractToolText(json: unknown): string {
   return text.slice(0, 8000);
 }
 
+/**
+ * Fair-use cost of a tool call: request + answer in rough tokens.
+ * Successful calls only — failures meter nothing. Best effort: a
+ * metering write never fails the call it measures.
+ */
+async function meterMcpCall(
+  env: Env,
+  runId: string | null | undefined,
+  args: Record<string, unknown>,
+  result: string,
+): Promise<void> {
+  if (!runId) return;
+  const units = Math.max(1, Math.ceil((JSON.stringify(args).length + result.length) / 4));
+  await addRunTokens(env, runId, units).catch(() => {});
+}
+
 export async function callTool(
   env: Env,
   server: McpServerRow,
@@ -331,8 +361,13 @@ export async function callTool(
   args: Record<string, unknown>,
   seatId: string | null = null,
   retried = false,
+  meter?: { runId: string },
 ): Promise<string> {
-  if (isBoxServer(server)) return callBoxTool(env, server, tool, args, seatId);
+  if (isBoxServer(server)) {
+    const boxed = await callBoxTool(env, server, tool, args, seatId);
+    await meterMcpCall(env, meter?.runId, args, boxed);
+    return boxed;
+  }
   const secret = await serverSecretForSeat(env, server, seatId);
   let json: unknown;
   try {
@@ -354,11 +389,13 @@ export async function callTool(
       err.code === "auth"
     ) {
       await refreshOAuth(env, server);
-      return callTool(env, server, tool, args, seatId, true);
+      return callTool(env, server, tool, args, seatId, true, meter);
     }
     throw err;
   }
-  return extractToolText(json);
+  const result = extractToolText(json);
+  await meterMcpCall(env, meter?.runId, args, result);
+  return result;
 }
 
 // --- registry ---
@@ -460,6 +497,7 @@ export async function addServer(
     }
     boxArgvJson = JSON.stringify({ bin: argv.bin, args: argv.args });
   }
+  if (!isBox) assertPublicHttpUrl(url);
   let probe: ProbeResult;
   if (isBox) {
     // No live probe at add time: the server runs inside a hire's box,
@@ -539,15 +577,6 @@ export async function setTrust(
   const ok = (res.meta.changes ?? 0) === 1;
   if (ok) await audit(env, null, "human", "mcp.trust_set", { org: orgId, server: id, status });
   return ok;
-}
-
-export async function setCap(env: Env, orgId: string, id: string, cents: number): Promise<boolean> {
-  const res = await env.DB.prepare(
-    "UPDATE mcp_servers SET spend_cap_cents = ? WHERE org_id = ? AND id = ?",
-  )
-    .bind(Math.max(0, Math.floor(cents)), orgId, id)
-    .run();
-  return (res.meta.changes ?? 0) === 1;
 }
 
 // --- vault (same key + rotation path as OAuth tokens) ---

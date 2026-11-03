@@ -70,14 +70,22 @@ describe("storefront password storage", () => {
 
   it("rejects bad passwords", async () => {
     const { env } = testEnv();
-    await expect(prepareProviderConfig(env, "org1", "shopify", { storePassword: "" })).rejects.toBeInstanceOf(
-      BadProviderConfig,
-    );
     await expect(
       prepareProviderConfig(env, "org1", "shopify", { storePassword: "x".repeat(201) }),
     ).rejects.toBeInstanceOf(BadProviderConfig);
     await expect(
       prepareProviderConfig(env, "org1", "slack", { storePassword: "nope" }),
     ).rejects.toBeInstanceOf(BadProviderConfig);
+  });
+
+  it("an empty password clears the saved one", async () => {
+    const { env } = testEnv();
+    await save(env, { shop: "tres-cumbres.myshopify.com", storePassword: "dev-secret" });
+    expect(await getStorePassword(env, "org1")).toBe("dev-secret");
+    await save(env, { storePassword: "" });
+    expect(await getStorePassword(env, "org1")).toBeNull();
+    const raw = await getProviderConfig(env, "org1", "shopify");
+    expect("storePasswordEnc" in raw).toBe(false);
+    expect(raw.shop).toBe("tres-cumbres.myshopify.com");
   });
 });

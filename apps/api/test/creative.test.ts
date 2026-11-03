@@ -254,6 +254,29 @@ function hooksFor(w: World) {
         .run();
       return id;
     },
+    updateAction: async (
+      actionId: string,
+      target: string,
+      status: string,
+      payload: Record<string, unknown> = {},
+      revertPayload?: Record<string, unknown>,
+    ): Promise<void> => {
+      const row = w.tables.actions.find((a) => a.id === actionId);
+      if (!row) return;
+      const proof = buildProof(row.kind, target, status, actionLabel(row.kind), revertPayload, payload);
+      await w.env.DB.prepare(
+        "UPDATE actions SET target = ?, status = ?, payload = ?, revert_payload = ?, proof = ? WHERE id = ?",
+      )
+        .bind(
+          target,
+          status,
+          JSON.stringify(payload),
+          revertPayload ? JSON.stringify(revertPayload) : null,
+          proof ? JSON.stringify(proof) : null,
+          actionId,
+        )
+        .run();
+    },
     addTokens: async (n: number) => {
       w.tokens.n += n;
     },
@@ -408,6 +431,59 @@ describe("campaign image act", () => {
     expect(row?.status).toBe("would_do");
     expect(w.imageCalls).toHaveLength(0);
   });
+
+  it("(f) resumes a pending row: no duplicate generation or posts", async () => {
+    const w = await seedWorld({ notionPage: true });
+    const URL = "https://api.test/a/abc123";
+    w.tables.actions.push({
+      id: "pending1",
+      run_id: RUN,
+      kind: "creative.campaign_image",
+      target: "campaign images",
+      status: "pending",
+      payload: JSON.stringify({
+        started: true,
+        plan: { formats: ["feed"], headline: "Black Friday Blowout", visual: "Hero bag" },
+        urls: [URL],
+        heroIdx: 0,
+        publishedTokens: ["tok1"],
+        image: { url: URL, boxes: [{ label: "brand", box: [1, 2, 3, 4], ok: true }] },
+        visionSummary: "Checked by Muse Spark: brand ✓",
+        imageCount: 1,
+        imageCostCents: 1,
+        code: "BREW20",
+        percent: 20,
+        slack: { channel: "C1", ts: "T0" },
+      }),
+      revert_payload: null,
+      proof: null,
+    });
+    await runAct(w);
+    // Finished phases stay finished.
+    expect(w.imageCalls).toHaveLength(0);
+    expect(w.sparkTexts).toHaveLength(0);
+    expect(w.slackPosts).toHaveLength(0);
+    expect(w.r2.store.size).toBe(0);
+    // The unfinished phase completes.
+    expect(w.notionAppends).toHaveLength(1);
+    // One row, finished in place with the saved urls.
+    const rows = w.tables.actions.filter((a) => a.kind === "creative.campaign_image");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe("pending1");
+    expect(rows[0].status).toBe("done");
+    expect(rows[0].target).toBe("Black Friday Blowout");
+    const payload = JSON.parse(String(rows[0].payload)) as {
+      images: string[];
+      imageCount: number;
+    };
+    expect(payload.images).toEqual([URL]);
+    expect(payload.imageCount).toBe(1);
+    expect(JSON.parse(String(rows[0].revert_payload))).toEqual({
+      tokens: ["tok1"],
+      slackChannel: "C1",
+      slackTs: "T0",
+    });
+  });
 });
 
 describe("public image route + undo", () => {
@@ -421,7 +497,7 @@ describe("public image route + undo", () => {
     const ok = await servePublicImage(w.env, token);
     expect(ok.status).toBe(200);
     expect(ok.headers.get("content-type")).toBe("image/png");
-    expect(ok.headers.get("cache-control")).toBe("public, max-age=86400");
+    expect(ok.headers.get("cache-control")).toBe("public, max-age=300");
     expect((await ok.arrayBuffer()).byteLength).toBe(8);
     expect((await servePublicImage(w.env, "bogus")).status).toBe(404);
 
@@ -432,5 +508,17 @@ describe("public image route + undo", () => {
     expect(w.slackDeletes).toBe(1);
     expect(w.r2.store.has(r2key)).toBe(true);
     expect((await servePublicImage(w.env, token)).status).toBe(404);
+  });
+
+  it("undo still revokes when Slack disconnected afterwards", async () => {
+    const w = await seedWorld({ discount: false });
+    await runAct(w);
+    const token = String(w.tables.public_images[0].token);
+    w.tables.oauth_tokens = w.tables.oauth_tokens.filter((t) => t.provider !== "slack");
+    const revert = await executeRevert(w.env, ORG, RUN);
+    expect(revert.failed).toEqual([]);
+    expect(w.slackDeletes).toBe(0);
+    expect((await servePublicImage(w.env, token)).status).toBe(404);
+    expect(w.tables.audit_log.some((r) => r.event === "revert.delivery_kept")).toBe(true);
   });
 });

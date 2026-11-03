@@ -97,3 +97,12 @@ test("validateProviderConfig: token-only providers accept anything", () => {
   }
   assert.equal(validateProviderConfig("nope", {}).ok, false);
 });
+
+test("validateProviderConfig: slack digest channel is optional but bounded", () => {
+  assert.deepEqual(validateProviderConfig("slack", {}), { ok: true });
+  assert.deepEqual(validateProviderConfig("slack", { digest_channel: "#acme-weekly" }), {
+    ok: true,
+  });
+  assert.equal(validateProviderConfig("slack", { digest_channel: "x".repeat(81) }).ok, false);
+  assert.equal(validateProviderConfig("slack", { digest_channel: 7 }).ok, false);
+});

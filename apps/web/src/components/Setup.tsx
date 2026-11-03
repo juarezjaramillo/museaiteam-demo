@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  CREATIVE_SCOPE,
+  CREATIVE_SYSTEM,
   LIVE_PROVIDERS,
   PROVIDER_IDS,
   SEAT_ROLES,
@@ -23,15 +25,15 @@ function GuardEditor({
 }) {
   const [systems, setSystems] = useState<string[]>(row.systems);
   const [scope, setScope] = useState<string[]>(row.write_scope);
-  const [cap, setCap] = useState((row.spend_cap_cents / 100).toFixed(0));
   const [busy, setBusy] = useState(false);
   const knownScopeIds = new Set(
     PROVIDER_IDS.flatMap((p) => WRITE_SCOPES[p].map((s) => s.id)),
   );
   // Values typed before the pickers existed ride along untouched —
   // shown as removable tags, never silently dropped by a save.
-  const customSystems = systems.filter((s) => !isKnownProvider(s));
-  const customScopes = scope.filter((s) => !knownScopeIds.has(s));
+  // The studio has real pickers below, so it never shows as custom.
+  const customSystems = systems.filter((s) => s !== CREATIVE_SYSTEM && !isKnownProvider(s));
+  const customScopes = scope.filter((s) => s !== CREATIVE_SCOPE && !knownScopeIds.has(s));
 
   function toggle(list: string[], v: string): string[] {
     return list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
@@ -42,9 +44,13 @@ function GuardEditor({
     // A change without its system is always denied, so unchecking a
     // system drops its changes too — the dead combo can't be saved.
     setSystems(next);
-    if (!next.includes(p) && isKnownProvider(p)) {
-      const ids = new Set(WRITE_SCOPES[p].map((s) => s.id));
-      setScope((prev) => prev.filter((s) => !ids.has(s)));
+    if (!next.includes(p)) {
+      if (p === CREATIVE_SYSTEM) {
+        setScope((prev) => prev.filter((s) => s !== CREATIVE_SCOPE));
+      } else if (isKnownProvider(p)) {
+        const ids = new Set(WRITE_SCOPES[p].map((s) => s.id));
+        setScope((prev) => prev.filter((s) => !ids.has(s)));
+      }
     }
   }
 
@@ -63,7 +69,9 @@ function GuardEditor({
         worker_role: row.worker_role,
         systems,
         write_scope: scope,
-        spend_cap_cents: Math.round(Number(cap) * 100) || 0,
+        // Spend caps are not enforced yet: pass the stored value
+        // through untouched instead of offering a dead control.
+        spend_cap_cents: row.spend_cap_cents,
         escalate_on: row.escalate_on,
       });
       onSaved();
@@ -89,6 +97,14 @@ function GuardEditor({
             <span>{providerLabel(p)}</span>
           </label>
         ))}
+        <label className="ask-tool" key={CREATIVE_SYSTEM}>
+          <input
+            type="checkbox"
+            checked={systems.includes(CREATIVE_SYSTEM)}
+            onChange={() => toggleSystem(CREATIVE_SYSTEM)}
+          />
+          <span>{providerLabel(CREATIVE_SYSTEM)}</span>
+        </label>
         {customSystems.map((s) => (
           <span className="dim" key={s}>
             Also: {s}{" "}
@@ -114,6 +130,19 @@ function GuardEditor({
             ))}
           </div>
         ))}
+        {systems.includes(CREATIVE_SYSTEM) && (
+          <div key={CREATIVE_SYSTEM}>
+            <span className="dim">{providerLabel(CREATIVE_SYSTEM)}</span>
+            <label className="ask-tool" key={CREATIVE_SCOPE}>
+              <input
+                type="checkbox"
+                checked={scope.includes(CREATIVE_SCOPE)}
+                onChange={() => toggleScope(CREATIVE_SYSTEM, CREATIVE_SCOPE)}
+              />
+              <span>{scopeLabel(CREATIVE_SCOPE)}</span>
+            </label>
+          </div>
+        )}
         {customScopes.map((s) => (
           <span className="dim" key={s}>
             Also: {s}{" "}
@@ -122,17 +151,6 @@ function GuardEditor({
             </button>
           </span>
         ))}
-      </td>
-      <td>
-        <label>
-          ${" "}
-          <input
-            className="narrow"
-            value={cap}
-            onChange={(e) => setCap(e.target.value)}
-            title="0 = no limit"
-          />
-        </label>
       </td>
       <td>
         <button onClick={save} disabled={busy}>
@@ -198,6 +216,93 @@ function IdeasEditor({ org }: { org: string }) {
             onChange={(e) => setGrace(e.target.value)}
           />
         </label>
+        <button onClick={save}>Save</button>
+        {msg && <span className="dim">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+const PROFILE_FIELDS: Array<{ key: string; label: string; area?: boolean }> = [
+  { key: "icp", label: "Ideal customer", area: true },
+  { key: "offering", label: "Offering", area: true },
+  { key: "customer_count", label: "Customers" },
+  { key: "employee_count", label: "Employees" },
+  { key: "help_center", label: "Help center", area: true },
+  { key: "pricing", label: "Pricing", area: true },
+  { key: "tone", label: "Tone of voice", area: true },
+  { key: "competitors", label: "Competitors", area: true },
+  { key: "complaint_themes", label: "Complaint themes", area: true },
+  { key: "tools", label: "Tools", area: true },
+];
+
+function CompanyProfile({ org }: { org: string }) {
+  const [profile, setProfile] = useState<Record<string, string>>({});
+  const [website, setWebsite] = useState("");
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    api
+      .getProfile(org)
+      .then(({ profile }) => setProfile(profile))
+      .catch(() => {});
+    api
+      .getOrg(org)
+      .then((g) => setWebsite(g.websiteUrl ?? ""))
+      .catch(() => {});
+  }, [org]);
+
+  async function save() {
+    setMsg("");
+    try {
+      const patch: Record<string, string> = {};
+      for (const f of PROFILE_FIELDS) patch[f.key] = profile[f.key] ?? "";
+      const { profile: saved } = await api.putProfile(org, patch);
+      setProfile(saved);
+      await api.putSettings(org, { website_url: website });
+      setMsg("Saved");
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  return (
+    <div>
+      <p className="dim">
+        Gathered from your connected tools and refreshed weekly. Edit
+        anything — your words win and are never overwritten.
+      </p>
+      <div className="row">
+        <label>
+          Website{" "}
+          <input
+            placeholder="https://…"
+            value={website}
+            onChange={(e) => setWebsite(e.target.value)}
+          />
+        </label>
+      </div>
+      {PROFILE_FIELDS.map((f) => (
+        <div className="row" key={f.key}>
+          <label>
+            {f.label}{" "}
+            {f.area ? (
+              <textarea
+                rows={2}
+                value={profile[f.key] ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, [f.key]: e.target.value }))}
+              />
+            ) : (
+              <input
+                className="narrow"
+                value={profile[f.key] ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, [f.key]: e.target.value }))}
+              />
+            )}
+          </label>
+        </div>
+      ))}
+      <div className="row">
         <button onClick={save}>Save</button>
         {msg && <span className="dim">{msg}</span>}
       </div>
@@ -284,46 +389,6 @@ function ServerKeyForm({
     </span>
   );
 }
-
-function ServerCapForm({
-  org,
-  server,
-  reload,
-  notify,
-}: {
-  org: string;
-  server: McpServer;
-  reload: () => void;
-  notify: (m: string) => void;
-}) {
-  const [dollars, setDollars] = useState((server.spendCapCents / 100).toFixed(0));
-  async function save() {
-    try {
-      await api.putMcpCap(org, server.id, Math.round(Number(dollars) * 100) || 0);
-      notify("Cap saved.");
-      reload();
-    } catch (e) {
-      notify(String(e));
-    }
-  }
-  return (
-    <span>
-      <label>
-        Max paid trials ${" "}
-        <input
-          className="narrow"
-          value={dollars}
-          onChange={(e) => setDollars(e.target.value)}
-        />
-      </label>{" "}
-      <button className="sm" onClick={save}>
-        Save
-      </button>{" "}
-      <span className="dim">0 = paid plans always ask</span>
-    </span>
-  );
-}
-
 function ToolsStep({
   org,
   conns,
@@ -344,6 +409,8 @@ function ToolsStep({
   const [shop, setShop] = useState("");
   const [parent, setParent] = useState("");
   const [savedParent, setSavedParent] = useState("");
+  const [digestCh, setDigestCh] = useState("");
+  const [savedDigestCh, setSavedDigestCh] = useState("");
   const [storePw, setStorePw] = useState("");
   const [storePwSaved, setStorePwSaved] = useState(false);
   const [replacingPw, setReplacingPw] = useState(false);
@@ -367,14 +434,30 @@ function ToolsStep({
       .getProviderConfig(org, "shopify")
       .then(({ config }) => setStorePwSaved(config.storePasswordSaved === true))
       .catch(() => setStorePwSaved(false));
+    api
+      .getProviderConfig(org, "slack")
+      .then(({ config }) => {
+        if (typeof config.digest_channel === "string") setSavedDigestCh(config.digest_channel);
+      })
+      .catch(() => setSavedDigestCh(""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [org, conns.shopify]);
+  }, [org, conns.shopify, conns.slack]);
 
   async function saveParent() {
     try {
       await api.putProviderConfig(org, "notion", { parentPageId: parent });
       setSavedParent(parent);
       notify("Notion parent page saved.");
+    } catch (e) {
+      notify(String(e));
+    }
+  }
+
+  async function saveDigestCh() {
+    try {
+      await api.putProviderConfig(org, "slack", { digest_channel: digestCh });
+      setSavedDigestCh(digestCh);
+      notify("Digest channel saved.");
     } catch (e) {
       notify(String(e));
     }
@@ -387,6 +470,18 @@ function ToolsStep({
       setStorePwSaved(true);
       setReplacingPw(false);
       notify("Store password saved.");
+    } catch (e) {
+      notify(String(e));
+    }
+  }
+
+  async function clearStorePw() {
+    try {
+      await api.putProviderConfig(org, "shopify", { storePassword: "" });
+      setStorePw("");
+      setStorePwSaved(false);
+      setReplacingPw(false);
+      notify("Store password removed.");
     } catch (e) {
       notify(String(e));
     }
@@ -428,6 +523,16 @@ function ToolsStep({
     }
   }
 
+  async function disconnect(p: string) {
+    setMsg("");
+    try {
+      await api.disconnectProvider(org, p);
+      reload();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
   return (
     <div>
       <p className="dim">
@@ -440,6 +545,9 @@ function ToolsStep({
           {conns[p] === "connected" ? (
             <span>
               <span className="badge soft">connected</span>{" "}
+              <button className="sm" onClick={() => disconnect(p)}>
+                Disconnect
+              </button>{" "}
               {retiring[p] && (
                 <span className="dim">
                   shared — move the {retiring[p]} hire to its own login (Hires page)
@@ -509,7 +617,6 @@ function ToolsStep({
                 notify={notify}
               />
             )}
-            <ServerCapForm org={org} server={s} reload={reload} notify={notify} />
             {s.status === "pending" && (
               <span>
                 <button className="sm" onClick={() => trust(s.id, "trusted")}>Trust</button>{" "}
@@ -582,6 +689,20 @@ function ToolsStep({
           </button>
           {savedParent && <span className="dim">saved: {savedParent}</span>}
         </div>
+        {conns.slack === "connected" && (
+          <div className="row">
+            <input
+              placeholder="#weekly-digest"
+              title="Weekly digest posts here"
+              value={digestCh}
+              onChange={(e) => setDigestCh(e.target.value)}
+            />
+            <button className="sm" onClick={saveDigestCh} disabled={!digestCh.trim()}>
+              Save
+            </button>
+            {savedDigestCh && <span className="dim">saved: {savedDigestCh}</span>}
+          </div>
+        )}
         {conns.shopify === "connected" && (
           <>
             <div className="row">
@@ -590,6 +711,9 @@ function ToolsStep({
                   <span className="dim">Store password: Saved</span>
                   <button className="sm" onClick={() => setReplacingPw(true)}>
                     Replace
+                  </button>
+                  <button className="sm" onClick={clearStorePw}>
+                    Remove
                   </button>
                 </>
               ) : (
@@ -751,33 +875,12 @@ function TeamStep({
 }
 
 function LimitCard({
-  org,
   row,
-  onSaved,
 }: {
   org: string;
   row: GuardrailRow;
   onSaved: () => void;
 }) {
-  const [spend, setSpend] = useState((row.spend_cap_cents / 100).toFixed(0));
-  const [busy, setBusy] = useState(false);
-
-  async function saveSpend() {
-    setBusy(true);
-    try {
-      await api.putGuardrails(org, {
-        worker_role: row.worker_role,
-        systems: row.systems,
-        write_scope: row.write_scope,
-        spend_cap_cents: Math.round(Number(spend) * 100) || 0,
-        escalate_on: row.escalate_on,
-      });
-      onSaved();
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="conn-row">
       <div>
@@ -790,20 +893,6 @@ function LimitCard({
             changes {row.write_scope.map(scopeLabel).join(", ") || "nothing"}
           </span>
         )}
-      </div>
-      <div className="row">
-        <label>
-          Max spend ${" "}
-          <input
-            className="narrow"
-            value={spend}
-            onChange={(e) => setSpend(e.target.value)}
-            title="0 = no limit"
-          />
-        </label>
-        <button className="sm" onClick={saveSpend} disabled={busy}>
-          Save
-        </button>
       </div>
     </div>
   );
@@ -823,7 +912,7 @@ function LimitsStep({
   return (
     <div>
       <p className="dim">
-        What each hire may touch, and how much it may spend. Defaults
+        What each hire may touch. Defaults
         are safe — change only what you care about.
       </p>
       {guards.map((g) => (
@@ -842,7 +931,6 @@ function LimitsStep({
                 <th>Worker</th>
                 <th>Tools</th>
                 <th>Allowed to change</th>
-                <th>Max spend</th>
                 <th></th>
               </tr>
             </thead>
@@ -857,7 +945,6 @@ function LimitsStep({
               ))}
             </tbody>
           </table>
-          <p className="dim">Spend is in dollars. 0 means no limit.</p>
         </div>
       )}
     </div>
@@ -1034,6 +1121,8 @@ export function Setup({ org }: { org: string }) {
         <IdeasEditor org={org} />
         <h2>Team memory</h2>
         <MemoryBlock org={org} notify={setNote} />
+        <h2>Company profile</h2>
+        <CompanyProfile org={org} />
         <h2>Help</h2>
         <p className="dim">
           Stuck? Write to{" "}
