@@ -23,6 +23,7 @@ crons = ["*/5 * * * *"]
 binding = "DB"
 database_name = "museaiteam"
 database_id = "5202d49b-afaf-44d5-a297-5fce03ff1b08"
+migrations_dir = "../../db/migrations"
 
 [[r2_buckets]]
 binding = "ARTIFACTS"
