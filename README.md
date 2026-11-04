@@ -73,11 +73,6 @@ npm run dev:api   # wrangler dev, API + Workflow + DO
 npm run dev:web   # Vite dashboard
 ```
 
-## Docs
-
-- [10-day plan](docs/plan-10-day.md) — 3-4-3 split, day-by-day, cut list
-- [Demo script](docs/demo-script.md) — 3-minute forward arc + backup plan
-
 ## Status
 
 Scaffold stage: repo layout, configs, schema, skeletons, docs. No provider
