@@ -73,6 +73,7 @@ import {
   setSeatMap,
   seatMapFor,
   tickProvisions,
+  verifySeatTool,
 } from "./provision.js";
 import {
   bindSeatTool,
@@ -1072,6 +1073,9 @@ app.get("/api/auth/:provider/callback", async (c) => {
         seat: verified.seat,
         grantedScope: tokens.grantedScope ?? "unknown",
       });
+      c.executionCtx.waitUntil(
+        verifySeatTool(c.env, verified.org, verified.seat, provider).catch(() => {}),
+      );
       return c.redirect(
         `${c.env.APP_URL}/?connected=${provider}&org=${encodeURIComponent(verified.org)}&seat=${encodeURIComponent(verified.seat)}`,
         302,
@@ -1674,6 +1678,8 @@ app.put(
     } catch (err) {
       return c.json({ error: String(err).slice(0, 120) }, 404);
     }
+    // A fresh login resolves the waiting provision in the background.
+    c.executionCtx.waitUntil(verifySeatTool(c.env, org, c.req.param("id"), b.tool).catch(() => {}));
     return c.json({ ok: true });
   },
 );

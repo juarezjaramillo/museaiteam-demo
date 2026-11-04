@@ -16,7 +16,9 @@ import { retireOrgLinkIfDone } from "./cutover.js";
 import { audit } from "./db.js";
 import { maybeStartSessionOne } from "./enroll.js";
 import { authTest as slackAuthTest } from "./integrations/slack.js";
+import { API_VERSION as SHOPIFY_API_VERSION } from "./integrations/shopify.js";
 import { notify } from "./notify.js";
+import { getProviderConfig } from "./oauth.js";
 import { getSeat, listSeatMail } from "./seat-mail.js";
 import { seatToken } from "./seat-creds.js";
 import { trialGate } from "./trial.js";
@@ -619,7 +621,7 @@ const VERIFY_TIMEOUT_MS = 10_000;
  * A cheap read call proving the hire's token works. Tools without a
  * known check stay unverified — they verify at first box use instead.
  */
-async function checkVendorToken(tool: string, token: string): Promise<boolean> {
+async function checkVendorToken(env: Env, orgId: string, tool: string, token: string): Promise<boolean> {
   const signal = AbortSignal.timeout(VERIFY_TIMEOUT_MS);
   try {
     switch (tool) {
@@ -659,6 +661,16 @@ async function checkVendorToken(tool: string, token: string): Promise<boolean> {
         );
         return res.ok;
       }
+      case "shopify": {
+        const cfg = await getProviderConfig(env, orgId, "shopify");
+        const shop = typeof cfg.shop === "string" ? cfg.shop : "";
+        if (!shop) return false;
+        const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/shop.json`, {
+          headers: { "X-Shopify-Access-Token": token },
+          signal,
+        });
+        return res.ok;
+      }
       default:
         return false;
     }
@@ -680,7 +692,7 @@ export async function verifySeatTool(
 ): Promise<boolean> {
   const token = await seatToken(env, orgId, seatId, tool);
   if (!token) return false;
-  if (!(await checkVendorToken(tool, token))) return false;
+  if (!(await checkVendorToken(env, orgId, tool, token))) return false;
   await env.DB.prepare(
     `INSERT INTO seat_provisions (seat_id, tool, step, status) VALUES (?, ?, 'verify', 'verified')
      ON CONFLICT(seat_id, tool) DO UPDATE SET step = 'verify', status = 'verified', updated_at = datetime('now')`,

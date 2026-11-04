@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LIVE_PROVIDERS, PROVIDER_IDS, PROVIDER_LABELS, crewName, dateLabel, hireDisplayName, paidTools, providerLabel, roleLabel, toolForServer } from "@museaiteam/shared";
+import { LIVE_PROVIDERS, PROVIDER_IDS, PROVIDER_LABELS, crewName, dateLabel, hireDisplayName, isKnownProvider, paidTools, providerLabel, roleLabel, toolForServer } from "@museaiteam/shared";
 import { api, type HireRow, type McpServer } from "../api.js";
 import { GoButton } from "./GoButton.js";
 import { ThumbDown, ThumbUp } from "./icons.js";
@@ -416,7 +416,11 @@ function HireCard({
           {s.waiting.map((w) => (
             <p key={w.tool} className="dim">
               {providerLabel(w.tool)} — {w.detail || w.status}{" "}
-              {role === "owner" && <RelayForm org={org} seatId={s.id} tool={w.tool} done={reload} />}
+              {role === "owner" && (isKnownProvider(w.tool) ? (
+                <SeatConnect org={org} provider={w.tool} seatId={s.id} shop={shop} label="Connect" />
+              ) : (
+                <RelayForm org={org} seatId={s.id} tool={w.tool} done={reload} />
+              ))}
             </p>
           ))}
           <SeatLogins org={org} seatId={s.id} logins={s.logins} role={role} shop={shop} reload={reload} />

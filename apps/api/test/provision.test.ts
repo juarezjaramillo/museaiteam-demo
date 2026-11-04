@@ -158,6 +158,45 @@ describe("provisioning", () => {
     }
   });
 
+  it("verifies shopify against the org's stored shop", async () => {
+    const { env: e, tables } = env();
+    tables.provider_config.push({
+      org_id: "org1",
+      provider: "shopify",
+      config: JSON.stringify({ shop: "demo.myshopify.com" }),
+    });
+    let seen = "";
+    vi.stubGlobal("fetch", async (url: string) => {
+      seen = String(url);
+      return Response.json({ shop: { name: "demo" } });
+    });
+    try {
+      await setSeatCredential(e, "org1", "s1", { tool: "shopify", kind: "oauth", secret: "tok" });
+      expect(await verifySeatTool(e, "org1", "s1", "shopify")).toBe(true);
+      expect(seen).toBe("https://demo.myshopify.com/admin/api/2026-07/shop.json");
+      expect(tables.seat_provisions.some((r) => r.tool === "shopify" && r.status === "verified")).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("leaves shopify unverified without a stored shop or on vendor reject", async () => {
+    const noShop = env();
+    vi.stubGlobal("fetch", async () => Response.json({ shop: { name: "demo" } }));
+    try {
+      await setSeatCredential(noShop.env, "org1", "s1", { tool: "shopify", kind: "oauth", secret: "tok" });
+      expect(await verifySeatTool(noShop.env, "org1", "s1", "shopify")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    vi.stubGlobal("fetch", async () => new Response("no", { status: 401 }));
+    try {
+      expect(await verifySeatTool(noShop.env, "org1", "s1", "shopify")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("maps servers to provisionable tools", () => {
     expect(toolForServer({ id: "x", name: "Linear", url: "https://mcp.linear.app" })).toBe("linear");
     expect(toolForServer({ id: "x", name: "GitHub MCP", url: "https://x/mcp" })).toBe("github");

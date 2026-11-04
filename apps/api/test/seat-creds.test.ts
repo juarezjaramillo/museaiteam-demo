@@ -159,4 +159,18 @@ describe("key rotation", () => {
     // ...while its sibling still reads under the old one.
     expect(await decryptFromB64(oldKey, String(slack?.secret_enc))).toBe("xoxb-seat");
   });
+
+  it("reads oauth-kind logins: per-hire Connect vaults bearer tokens", async () => {
+    const { env: e } = env();
+    await setSeatCredential(e, "org1", "s-eng", { tool: "shopify", kind: "oauth", secret: "shpat-hire" });
+    expect(await seatToken(e, "org1", "s-eng", "shopify")).toBe("shpat-hire");
+  });
+
+  it("still refuses password and session kinds as bearer tokens", async () => {
+    const { env: e } = env();
+    await setSeatCredential(e, "org1", "s-eng", { tool: "github", kind: "password", secret: "user:pass" });
+    await setSeatCredential(e, "org1", "s-eng", { tool: "linear", kind: "session", secret: "cookie" });
+    expect(await seatToken(e, "org1", "s-eng", "github")).toBeNull();
+    expect(await seatToken(e, "org1", "s-eng", "linear")).toBeNull();
+  });
 });

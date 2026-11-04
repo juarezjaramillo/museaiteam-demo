@@ -207,7 +207,9 @@ export async function seatToken(
   )
     .bind(orgId, seatId, tool)
     .first<{ secret_enc: string; kind: string; status: string }>();
-  if (!row || row.kind !== "token" || row.status !== "ok") return null;
+  // OAuth access tokens are bearer tokens too: per-hire Connect vaults
+  // kind "oauth", and runs verify through this same reader.
+  if (!row || (row.kind !== "token" && row.kind !== "oauth") || row.status !== "ok") return null;
   try {
     return await decryptSeatSecret(env, orgId, seatId, tool, row);
   } catch {

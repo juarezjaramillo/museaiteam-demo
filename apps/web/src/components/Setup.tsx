@@ -389,6 +389,29 @@ function ServerKeyForm({
     </span>
   );
 }
+function ShopifyShopInput({ org, label }: { org: string; label: string }) {
+  const [typed, setTyped] = useState("");
+  return (
+    <span>
+      <input
+        placeholder="your-store.myshopify.com"
+        value={typed}
+        onChange={(e) => setTyped(e.target.value)}
+      />{" "}
+      {typed.trim() ? (
+        <GoButton
+          href={api.connectUrl(org, "shopify", `&shop=${encodeURIComponent(typed.trim())}`)}
+          className="sm"
+        >
+          {label}
+        </GoButton>
+      ) : (
+        <button className="sm" disabled>{label}</button>
+      )}
+    </span>
+  );
+}
+
 function ToolsStep({
   org,
   conns,
@@ -406,7 +429,8 @@ function ToolsStep({
   notify: (m: string) => void;
   reload: () => void;
 }) {
-  const [shop, setShop] = useState("");
+  const [savedShop, setSavedShop] = useState("");
+  const [changingShop, setChangingShop] = useState(false);
   const [parent, setParent] = useState("");
   const [savedParent, setSavedParent] = useState("");
   const [digestCh, setDigestCh] = useState("");
@@ -432,8 +456,15 @@ function ToolsStep({
       .catch(() => setProducts([]));
     api
       .getProviderConfig(org, "shopify")
-      .then(({ config }) => setStorePwSaved(config.storePasswordSaved === true))
-      .catch(() => setStorePwSaved(false));
+      .then(({ config }) => {
+        setStorePwSaved(config.storePasswordSaved === true);
+        setSavedShop(typeof config.shop === "string" ? config.shop : "");
+        setChangingShop(false);
+      })
+      .catch(() => {
+        setStorePwSaved(false);
+        setSavedShop("");
+      });
     api
       .getProviderConfig(org, "slack")
       .then(({ config }) => {
@@ -545,9 +576,16 @@ function ToolsStep({
           {conns[p] === "connected" ? (
             <span>
               <span className="badge soft">connected</span>{" "}
+              {p === "shopify" && savedShop && <span className="dim">{savedShop}</span>}{" "}
               <button className="sm" onClick={() => disconnect(p)}>
                 Disconnect
               </button>{" "}
+              {p === "shopify" && (
+                <button className="sm" onClick={() => setChangingShop((v) => !v)}>
+                  {changingShop ? "Cancel" : "Change store"}
+                </button>
+              )}{" "}
+              {p === "shopify" && changingShop && <ShopifyShopInput org={org} label="Connect" />}{" "}
               {retiring[p] && (
                 <span className="dim">
                   shared — move the {retiring[p]} hire to its own login (Hires page)
@@ -557,30 +595,23 @@ function ToolsStep({
           ) : conns[p] === "expired" ? (
             <span>
               <span className="badge warn">expired</span>{" "}
-              <GoButton href={api.connectUrl(org, p)} className="sm">Reconnect</GoButton>
-            </span>
-          ) : p === "shopify" ? (
-            <span>
-              <input
-                placeholder="your-store.myshopify.com"
-                value={shop}
-                onChange={(e) => setShop(e.target.value)}
-              />{" "}
-              {shop.trim() ? (
+              {p === "shopify" && !savedShop.trim() ? (
+                <ShopifyShopInput org={org} label="Reconnect" />
+              ) : (
                 <GoButton
                   href={api.connectUrl(
                     org,
                     p,
-                    `&shop=${encodeURIComponent(shop.trim())}`,
+                    p === "shopify" ? `&shop=${encodeURIComponent(savedShop.trim())}` : "",
                   )}
                   className="sm"
                 >
-                  Connect
+                  Reconnect
                 </GoButton>
-              ) : (
-                <button className="sm" disabled>Connect</button>
               )}
             </span>
+          ) : p === "shopify" ? (
+            <ShopifyShopInput org={org} label="Connect" />
           ) : (
             <GoButton href={api.connectUrl(org, p)} className="sm">Connect</GoButton>
           )}

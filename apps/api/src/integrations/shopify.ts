@@ -1,6 +1,6 @@
 import { providerFetch } from "./http.js";
 
-const API_VERSION = "2026-07";
+export const API_VERSION = "2026-07";
 
 async function gql<T>(
   shop: string,
