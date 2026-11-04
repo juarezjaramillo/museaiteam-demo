@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { PROVIDER_IDS, PROVIDER_LABELS, crewName, dateLabel, hireDisplayName, paidTools, providerLabel, roleLabel, toolForServer } from "@museaiteam/shared";
+import { LIVE_PROVIDERS, PROVIDER_IDS, PROVIDER_LABELS, crewName, dateLabel, hireDisplayName, paidTools, providerLabel, roleLabel, toolForServer } from "@museaiteam/shared";
 import { api, type HireRow, type McpServer } from "../api.js";
+import { GoButton } from "./GoButton.js";
 import { ThumbDown, ThumbUp } from "./icons.js";
 
 interface SeatView {
@@ -183,6 +184,127 @@ function GrantForm({
   );
 }
 
+function SeatConnect({
+  org,
+  provider,
+  seatId,
+  shop,
+  label,
+}: {
+  org: string;
+  provider: string;
+  seatId: string;
+  shop: string;
+  label: string;
+}) {
+  const [typed, setTyped] = useState("");
+  if (provider !== "shopify" || shop.trim()) {
+    const store = provider === "shopify" ? shop.trim() : undefined;
+    return (
+      <GoButton href={api.seatConnectUrl(org, provider, seatId, store)} className="sm">
+        {label}
+      </GoButton>
+    );
+  }
+  return (
+    <span>
+      <input
+        placeholder="your-store.myshopify.com"
+        value={typed}
+        onChange={(e) => setTyped(e.target.value)}
+      />{" "}
+      {typed.trim() ? (
+        <GoButton href={api.seatConnectUrl(org, provider, seatId, typed.trim())} className="sm">
+          {label}
+        </GoButton>
+      ) : (
+        <button className="sm" disabled>{label}</button>
+      )}
+    </span>
+  );
+}
+
+function SeatLogins({
+  org,
+  seatId,
+  logins,
+  role,
+  shop,
+  reload,
+}: {
+  org: string;
+  seatId: string;
+  logins: SeatView["logins"];
+  role: string;
+  shop: string;
+  reload: () => void;
+}) {
+  const [msg, setMsg] = useState("");
+  const owner = role === "owner";
+  const others = logins.filter((l) => !LIVE_PROVIDERS.includes(l.tool));
+
+  async function disconnect(tool: string) {
+    setMsg("");
+    try {
+      await api.deleteSeatCredential(org, seatId, tool);
+      reload();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  return (
+    <div>
+      <p>
+        <strong>Logins</strong>{" "}
+        <span className="dim">— one per hire, connected as this hire</span>
+      </p>
+      {msg && <p className="dim">{msg}</p>}
+      {LIVE_PROVIDERS.map((p) => {
+        const login = logins.find((l) => l.tool === p);
+        return (
+          <div className="conn-row" key={p}>
+            <strong>{providerLabel(p)}</strong>{" "}
+            {login?.status === "ok" ? (
+              <span>
+                <span className="badge soft">own login</span>{" "}
+                <span className="dim">
+                  {dateLabel(login.expires) ? `ok till ${dateLabel(login.expires)}` : "ok"}
+                </span>{" "}
+                {owner && (
+                  <button className="sm" onClick={() => disconnect(p)}>
+                    Disconnect
+                  </button>
+                )}
+              </span>
+            ) : login ? (
+              <span>
+                <span className="badge warn">stopped working</span>{" "}
+                {owner && (
+                  <SeatConnect org={org} provider={p} seatId={seatId} shop={shop} label="Reconnect" />
+                )}
+              </span>
+            ) : (
+              <span>
+                <span className="dim">no login yet</span>{" "}
+                {owner && (
+                  <SeatConnect org={org} provider={p} seatId={seatId} shop={shop} label="Connect" />
+                )}
+              </span>
+            )}
+          </div>
+        );
+      })}
+      {others.length > 0 && (
+        <p className="dim">
+          Other logins:{" "}
+          {others.map((l) => `${providerLabel(l.tool)} (${l.status})`).join(", ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function HireCard({
   org,
   seat: s,
@@ -195,6 +317,7 @@ function HireCard({
   act,
   reload,
   servers,
+  shop,
 }: {
   org: string;
   seat: SeatView;
@@ -207,6 +330,7 @@ function HireCard({
   act: (fn: () => Promise<unknown>, fail: string) => void;
   reload: () => void;
   servers: McpServer[];
+  shop: string;
 }) {
   const st = statusOf(s);
   const lost = s.logins.filter((l) => l.status === "lost");
@@ -285,7 +409,7 @@ function HireCard({
           {lost.length > 0 && (
             <p>
               {lost.map((l) => providerLabel(l.tool)).join(", ")} stopped working.{" "}
-              {role === "owner" ? "Paste a fresh login below." : "Ask the owner for a fresh login."}
+              {role === "owner" ? "Reconnect or paste a fresh login below." : "Ask the owner for a fresh login."}
             </p>
           )}
           {s.on.length > 0 && <p>Ready: {s.on.map(providerLabel).join(", ")}</p>}
@@ -295,15 +419,7 @@ function HireCard({
               {role === "owner" && <RelayForm org={org} seatId={s.id} tool={w.tool} done={reload} />}
             </p>
           ))}
-          {s.logins.length > 0 && (
-            <p className="dim">
-              Logins: {s.logins.map((l) => (
-                <span key={l.tool}>
-                  {providerLabel(l.tool)} ({l.status === "ok" ? (dateLabel(l.expires) ? `ok till ${dateLabel(l.expires)}` : "ok") : l.status}){" "}
-                </span>
-              ))}
-            </p>
-          )}
+          <SeatLogins org={org} seatId={s.id} logins={s.logins} role={role} shop={shop} reload={reload} />
           <p className="dim">
             Computer: {computerWords(s.box)}
             {s.spend && s.spend.seconds > 0 && (
@@ -334,6 +450,7 @@ export function Hires({ org, role }: { org: string; role: string }) {
   const [seats, setSeats] = useState<SeatView[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [meanwhile, setMeanwhile] = useState<string[]>([]);
+  const [shop, setShop] = useState("");
   const [cutover, setCutover] = useState<{ cutOver: boolean; providers: string[]; servers: string[]; kept: string[] } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
@@ -347,6 +464,12 @@ export function Hires({ org, role }: { org: string; role: string }) {
     const h = await api.getHires(org);
     setHires(h.hires);
     setServers((await api.getMcp(org)).servers);
+    try {
+      const { config } = await api.getProviderConfig(org, "shopify");
+      setShop(typeof config.shop === "string" ? config.shop : "");
+    } catch {
+      setShop("");
+    }
     if (role === "owner") {
       setCutover(await api.getCutover(org));
     }
@@ -392,6 +515,7 @@ export function Hires({ org, role }: { org: string; role: string }) {
             act={act}
             reload={load}
             servers={servers}
+            shop={shop}
           />
         ))}
       </ul>

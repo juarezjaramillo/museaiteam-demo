@@ -361,6 +361,12 @@ export const api = {
   signOutUrl: () => `${API_BASE}/api/auth/signout`,
   connectUrl: (org: string, provider: string, query = "") =>
     `${API_BASE}/api/auth/${provider}/connect?org=${encodeURIComponent(org)}${query}`,
+  seatConnectUrl: (org: string, provider: string, seatId: string, shop?: string) =>
+    `${API_BASE}/api/auth/${provider}/connect?org=${encodeURIComponent(org)}&seat=${encodeURIComponent(seatId)}${shop ? `&shop=${encodeURIComponent(shop)}` : ""}`,
+  deleteSeatCredential: (org: string, seatId: string, tool: string) =>
+    req<{ ok: boolean }>(`/api/orgs/${org}/seats/${seatId}/credentials/${encodeURIComponent(tool)}`, {
+      method: "DELETE",
+    }),
   getProviderConfig: (org: string, provider: string) =>
     req<{ config: Record<string, unknown> }>(
       `/api/orgs/${org}/config/${provider}`,

@@ -73,10 +73,10 @@ function tabFromHash(): Tab {
 }
 
 function initialTab(): Tab {
-  // OAuth round-trips land on Setup (where the connect started), not Home.
+  // OAuth round-trips land where the connect started, not Home.
   if (!location.hash) {
     const q = new URLSearchParams(location.search);
-    if (q.get("connected") || q.get("error")) return "setup";
+    if (q.get("connected") || q.get("error")) return q.get("seat") ? "hires" : "setup";
   }
   return tabFromHash();
 }
