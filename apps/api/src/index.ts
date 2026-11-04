@@ -258,6 +258,14 @@ app.use("/api/*", async (c, next) => {
     return c.body(null, 204);
   }
   await next();
+  if (allowed && c.res.status !== 101) {
+    const res = new Response(c.res.body, c.res);
+    res.headers.set("Access-Control-Allow-Origin", origin);
+    res.headers.set("Access-Control-Allow-Credentials", "true");
+    const vary = res.headers.get("Vary") ?? "";
+    if (!/(^|,)\s*origin\s*(,|$)/i.test(vary)) res.headers.append("Vary", "Origin");
+    c.res = res;
+  }
 });
 
 app.get("/api/health", (c) => c.json({ ok: true }));
