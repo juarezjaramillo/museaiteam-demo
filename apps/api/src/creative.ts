@@ -79,6 +79,26 @@ function pngToDataUrl(png: Uint8Array): string {
   return `data:image/png;base64,${btoa(bin)}`;
 }
 
+/** Shopify CDN URLs are not fetchable by Meta: download here, send a data URL. */
+async function photoToDataUrl(url: string): Promise<string | null> {
+  try {
+    const sized = url + (url.includes("?") ? "&" : "?") + "width=1024";
+    const res = await fetch(sized, { headers: { accept: "image/jpeg,image/png" } });
+    if (!res.ok) return null;
+    const type = (res.headers.get("content-type") ?? "").split(";")[0].trim();
+    if (type !== "image/jpeg" && type !== "image/png") return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > 4_000_000) return null;
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return `data:${type};base64,${btoa(bin)}`;
+  } catch {
+    return null;
+  }
+}
+
 /** Last-resort brand: Title Case the shop subdomain. */
 function brandFallback(shop: string): string {
   const words = (shop.split(".")[0] ?? shop)
@@ -355,10 +375,17 @@ export async function executeCreativeAct(
     let references: string[] = [];
     try {
       const products = await listProducts(shop, shopToken);
-      references = products
+      const urls = products
         .map((p) => p.imageUrl)
         .filter((u): u is string => !!u)
         .slice(0, 3);
+      references = (await Promise.all(urls.map(photoToDataUrl))).filter((u): u is string => !!u);
+      if (urls.length > 0 && references.length === 0) {
+        await audit(env, runId, "marketer", "action.note", {
+          system: "creative",
+          note: "product photos could not be downloaded, generating without references",
+        });
+      }
     } catch (err) {
       await audit(env, runId, "marketer", "action.note", {
         system: "creative",

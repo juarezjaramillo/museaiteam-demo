@@ -180,6 +180,14 @@ async function seedWorld(opts: {
         }
         return { ok: true, json: async () => ({ data: { shop: { name: "Tres Cumbres Coffee Co." } } }) };
       }
+      if (u.includes("cdn.shopify.com")) {
+        const bytes = new Uint8Array([137, 80, 78, 71]);
+        return {
+          ok: true,
+          headers: { get: (n: string) => (n.toLowerCase() === "content-type" ? "image/png" : null) },
+          arrayBuffer: async () => bytes.buffer,
+        };
+      }
       if (u.includes("api.meta.ai/v1/chat/completions")) {
         const content = (body.messages as Array<{ content: unknown }>)[1].content;
         if (typeof content === "string") {
@@ -334,7 +342,7 @@ describe("campaign image act", () => {
 
     expect(w.imageCalls).toHaveLength(2);
     expect(w.imageCalls[0].url).toContain("/images/edits");
-    expect(w.imageCalls[0].body.images).toEqual([{ image_url: "https://cdn.shopify.com/chiapas.png" }]);
+    expect(w.imageCalls[0].body.images).toEqual([{ image_url: expect.stringMatching(/^data:image\/png;base64,/) }]);
     expect(w.imageCalls[0].body.size).toBe("1080x1350");
     expect(w.imageCalls[1].body.size).toBe("1080x1920");
     const prompt = String(w.imageCalls[0].body.prompt);
