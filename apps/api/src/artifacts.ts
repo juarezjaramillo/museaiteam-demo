@@ -20,5 +20,5 @@ export async function publishPublicImage(
   )
     .bind(token, args.r2key, args.orgId, args.actionId)
     .run();
-  return { token, url: `${env.APP_URL}/a/${token}` };
+  return { token, url: `${env.API_URL}/a/${token}` };
 }

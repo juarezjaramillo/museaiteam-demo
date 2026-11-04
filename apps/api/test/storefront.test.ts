@@ -104,6 +104,7 @@ async function seedWorld(opts: {
     DB: new FakeDB(tables),
     ARTIFACTS: r2.bucket,
     APP_URL: "https://api.test",
+    API_URL: "https://api.test",
     META_MODEL_API_KEY: "k",
     TOKEN_ENC_KEY: TEST_KEY,
   } as unknown as Env;

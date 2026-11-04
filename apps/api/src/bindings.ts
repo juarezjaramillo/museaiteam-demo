@@ -9,6 +9,8 @@ export interface Env {
   HIRE_BOX?: DurableObjectNamespace;
   GOAL_RUN: Workflow;
   APP_URL: string;
+  /** Worker origin: serves /a/ artifact links + API. Never the UI. */
+  API_URL: string;
   AUTH_SECRET: string;
   TOKEN_ENC_KEY: string;
   TOKEN_ENC_KEY_PREV?: string;

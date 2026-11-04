@@ -4,17 +4,19 @@ compatibility_date = "2025-09-01"
 compatibility_flags = [ "nodejs_compat_v2" ]
 
 [vars]
-APP_URL = "https://museaiteam-api.juarezjaramillo.workers.dev"
+APP_URL = "https://museaiteam.pages.dev"
+API_URL = "https://museaiteam-api.juarezjaramillo.workers.dev"
 SPARK_MODE = "live"
 MAIL_FROM = "MuseAITeam Demo <onboarding@resend.dev>"
 DEMO_GITHUB_REPO = "juarezjaramillo/museaiteam-demo"
 DEMO_LINEAR_TEAM = "Muse AI Team Demo"
 DEMO_SLACK_CHANNEL = "ai-team"
 
-# Same-origin: the worker serves the dashboard SPA itself, so auth cookies
-# are first-party and post-login redirects land on a real page.
-[assets]
-directory = "../web/dist"
+# The worker is API-only: Pages serves the UI, the worker serves /api/*
+# and /a/* artifact links. No [assets]: nothing user-facing here.
+[env.dev.vars]
+APP_URL = "http://localhost:5173"
+API_URL = "http://localhost:8787"
 
 [triggers]
 crons = ["*/5 * * * *"]

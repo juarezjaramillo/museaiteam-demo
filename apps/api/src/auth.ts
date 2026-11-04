@@ -15,6 +15,37 @@ export function authConfigured(env: Env): boolean {
   );
 }
 
+/**
+ * Post-auth landing: the app home, never the API host. Relative and
+ * same-app targets pass through; anything else (including Auth.js's
+ * default same-host baseUrl) collapses to the app root.
+ */
+export function authRedirectTarget(appUrl: string, url: string): string {
+  try {
+    const target = new URL(url, appUrl);
+    if (target.origin === new URL(appUrl).origin) return target.toString();
+  } catch {
+    /* malformed: fall through to the app root */
+  }
+  return appUrl;
+}
+
+/**
+ * Session cookie: cross-site in prod (Pages calls the API
+ * cross-origin), classic Lax on local http where Secure cookies
+ * cannot set.
+ */
+export function sessionCookie(appUrl: string): {
+  name: string;
+  options: { httpOnly: boolean; sameSite: "none" | "lax"; path: string; secure: boolean };
+} {
+  const secure = appUrl.startsWith("https:");
+  return {
+    name: secure ? "__Secure-authjs.session-token" : "authjs.session-token",
+    options: { httpOnly: true, sameSite: secure ? "none" : "lax", path: "/", secure },
+  };
+}
+
 function buildConfig(env: Env): AuthConfig {
   const providers = [];
   if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
@@ -40,7 +71,11 @@ function buildConfig(env: Env): AuthConfig {
     basePath: "/api/auth",
     adapter: D1Adapter(env.DB),
     providers,
+    cookies: { sessionToken: sessionCookie(env.APP_URL) },
     callbacks: {
+      async redirect({ url }) {
+        return authRedirectTarget(env.APP_URL, url);
+      },
       async session({ session, user }) {
         return { ...session, user: { ...session.user, id: user.id } };
       },
