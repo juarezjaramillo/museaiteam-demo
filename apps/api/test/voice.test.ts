@@ -193,11 +193,12 @@ describe("voiceKeywords", () => {
       "Morgan",
       "Shopify",
       "Slack",
-      "Get the store ready for Black Friday",
       "Chiapas Altura",
     ]) {
       expect(kw).toContain(word);
     }
+    // 36 chars: Meta rejects the whole request past 30, so it stays out.
+    expect(kw).not.toContain("Get the store ready for Black Friday");
     expect(kw).not.toContain("Old archived goal");
     expect(kw).not.toContain("Kim");
     expect(kw.length).toBeLessThanOrEqual(50);
@@ -205,15 +206,27 @@ describe("voiceKeywords", () => {
 
   it("dedupes, trims, caps, and survives Shopify failure", async () => {
     const goals = Array.from({ length: 60 }, (_, i) => ({
-      title: `Goal number ${i} with a very long trailing description padding it out`,
+      title: `Goal number ${i}`,
       status: "active",
     }));
     goals[0] = { title: "tres cumbres", status: "active" };
     const w = await seedWorld({ goals, shopifyOk: false });
     const kw = await voiceKeywords(w.env, ORG);
     expect(kw).toHaveLength(50);
-    expect(kw.every((k) => k.length <= 40)).toBe(true);
+    expect(kw.every((k) => k.length <= 30)).toBe(true);
     expect(kw.filter((k) => k.toLowerCase() === "tres cumbres")).toHaveLength(1);
+  });
+
+  it("skips keywords over Meta's 30-char limit", async () => {
+    const w = await seedWorld({
+      goals: [
+        { title: "x".repeat(32), status: "active" },
+        { title: "y".repeat(30), status: "active" },
+      ],
+    });
+    const kw = await voiceKeywords(w.env, ORG);
+    expect(kw).not.toContain("x".repeat(32));
+    expect(kw).toContain("y".repeat(30));
   });
 });
 

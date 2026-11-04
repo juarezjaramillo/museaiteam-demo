@@ -16,6 +16,7 @@ import { approvedRoles } from "./teams.js";
 import { listGoals } from "./goals.js";
 
 export const VOICE_MODEL = "muse-voice-transcribe-1.0";
+export const META_KEYWORD_MAX_CHARS = 30;
 export const VOICE_DOLLARS_PER_HOUR = 0.18;
 export const VOICE_MAX_BYTES = 25 * 1024 * 1024;
 export const VOICE_TIMEOUT_MS = 120_000;
@@ -97,15 +98,17 @@ async function shopifyTitles(env: Env, orgId: string): Promise<string[]> {
 
 /**
  * Recognition bias: the org's own words. Max 50, deduped
- * case-insensitively, each at most 40 chars.
+ * case-insensitively. Meta rejects the whole request when any
+ * keyword tops 30 chars, so long ones are skipped, never sliced.
  */
 export async function voiceKeywords(env: Env, orgId: string): Promise<string[]> {
   const out: string[] = [];
   const seen = new Set<string>();
   const push = (s: unknown) => {
     if (typeof s !== "string") return;
-    const t = s.trim().slice(0, 40);
+    const t = s.trim();
     if (!t) return;
+    if (t.length > META_KEYWORD_MAX_CHARS) return;
     const k = t.toLowerCase();
     if (seen.has(k)) return;
     seen.add(k);
