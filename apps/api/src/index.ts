@@ -253,7 +253,7 @@ app.use("/api/*", async (c, next) => {
     c.header("Vary", "Origin");
   }
   if (c.req.method === "OPTIONS") {
-    c.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
+    c.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     c.header("Access-Control-Allow-Headers", "content-type,authorization");
     return c.body(null, 204);
   }
