@@ -746,6 +746,8 @@ export async function runDiscountPlan(
       `Decision: ${decision}`,
       "",
       "Design the discount: percent off, short title, days until it starts.",
+      "startInDays must be 0, so the code works today and the team can check it live at checkout. Use a later start only if the goal or decision explicitly asks for the discount itself to start later (for example 'start the discount on Black Friday').",
+      "An event date or deadline in the goal (like 'Black Friday is in three weeks') is NOT a start date for the discount.",
       'Reply JSON: {"percent": 15, "title": "...", "startInDays": 0}.',
     ].join("\n"),
     temperature: 0.8,
