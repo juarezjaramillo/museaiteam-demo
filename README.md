@@ -2,6 +2,8 @@
 
 AI employees for small businesses and solo founders. Give the team a goal, even as a voice note. The hires debate, vote, do the work in your real tools (Shopify, HubSpot, Slack, Notion, Linear, GitHub), and prove it's done.
 
+Live demo: https://museaiteam.pages.dev
+
 Built for the Meta Global AI Developer Hackathon (Startup track, solo).
 
 ## Built during the hackathon
