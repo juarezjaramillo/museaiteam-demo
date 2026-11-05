@@ -75,5 +75,10 @@ npm run dev:web   # Vite dashboard
 
 ## Status
 
-Scaffold stage: repo layout, configs, schema, skeletons, docs. No provider
-OAuth flows or role prompts implemented yet — see the plan for build order.
+Live: dashboard on Cloudflare Pages, API worker with D1, R2, Vectorize,
+scheduled runs, and one cloud computer per hire. Working now: Google/email
+login, voice-note goals in English and Spanish, provider OAuth (Shopify,
+HubSpot, Slack, Notion, Linear, GitHub) with one login per hire, campaign
+images from real product photos with vision checks, live storefront proof at
+checkout, Slack mentions answered from team memory, approvals, kill switch,
+and one-click revert.
